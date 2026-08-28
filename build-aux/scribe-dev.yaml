@@ -1,16 +1,16 @@
-# Flathub submission manifest.
+# Development manifest. Builds the working tree straight from disk, so an edit
+# is one `flatpak-builder --install` away.
 #
-# Copy this to the flathub/flathub PR branch as io.github.tduarte.Scribe.yaml.
-# It differs from the development manifest ONLY below the shared modules: the
-# source is a tagged git commit rather than the working tree, and the portal
-# spikes are not shipped. finish-args and cleanup are identical in both.
+# The manifest that goes to Flathub is io.github.tduarte.Scribe.yaml -- it has
+# to carry that exact name to satisfy flatpak-builder-lint, so this one is
+# named for its job instead.
+# It differs ONLY in the last modules: it takes its source from a tagged git
+# commit rather than this directory, and it does not ship the portal spikes.
+# finish-args and cleanup are identical in both and must stay that way. To
+# check after editing either one:
 #
-# Test it the way Flathub builds it -- fetch first, then build with the network
-# off, so anything not declared as a source fails loudly:
-#
-#   flatpak-builder --download-only --state-dir=.fb-offline  x build-aux/io.github.tduarte.Scribe.flathub.yaml
-#   flatpak-builder --sandbox --disable-download --state-dir=.fb-offline --force-clean \
-#       build-dir build-aux/io.github.tduarte.Scribe.flathub.yaml
+#   for f in build-aux/io.github.tduarte.Scribe*.yaml; do
+#     sed -n '/^finish-args:/,/^modules:/p' "$f" | md5sum; done   # both hashes equal
 app-id: io.github.tduarte.Scribe
 runtime: org.gnome.Platform
 runtime-version: '50'
@@ -61,11 +61,38 @@ modules:
   - pywhispercpp.yaml
   - silero-vad-model.yaml
 
+  # The portal spikes, installed alongside the app so they exercise the real
+  # modules rather than a copy. See docs/PORTAL-FINDINGS.md. Development only --
+  # they are not part of the Flathub build.
+  - name: scribe-spikes
+    buildsystem: simple
+    build-commands:
+      - install -Dm755 spikes/spike_shortcuts.py /app/bin/spike-shortcuts
+      - install -Dm755 spikes/spike_inject.py    /app/bin/spike-inject
+    sources:
+      - type: dir
+        path: ..
+        skip:
+          - .flatpak-builder
+          - .git
+          - .venv
+          - build
+          - build-dir
+          - build-spike
+          - repo
+
   - name: scribe
     buildsystem: meson
     config-opts:
       - -Dbuildtype=release
     sources:
-      - type: git
-        url: https://github.com/tduarte/Scribe.git
-        commit: 848474dd90ae33a5af82b55a6b67c0191976172e
+      - type: dir
+        path: ..
+        skip:
+          - .flatpak-builder
+          - .git
+          - .venv
+          - build
+          - build-dir
+          - build-spike
+          - repo

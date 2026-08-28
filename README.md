@@ -61,7 +61,7 @@ faster, so the GPU only starts paying off from `small` upwards.
 
 ```bash
 flatpak install flathub org.gnome.Platform//50 org.gnome.Sdk//50
-flatpak-builder --user --install --force-clean build build-aux/io.github.tduarte.Scribe.yaml
+flatpak-builder --user --install --force-clean build build-aux/scribe-dev.yaml
 flatpak run io.github.tduarte.Scribe
 ```
 
