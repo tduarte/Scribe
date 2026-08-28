@@ -70,5 +70,5 @@ modules:
     sources:
       - type: git
         url: https://github.com/tduarte/Scribe.git
-        tag: v0.1.1
-        commit: 0f3a21e35278f0ba04e499f5bcc8adb6aadee206
+        tag: v0.1.2
+        commit: 48d64bf1bfd549240e00e6d2ee4f95d57815a6da
