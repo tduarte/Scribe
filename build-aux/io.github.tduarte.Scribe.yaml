@@ -10,9 +10,9 @@
 # Test it the way Flathub builds it -- fetch first, then build with the network
 # off, so anything not declared as a source fails loudly:
 #
-#   flatpak-builder --download-only --state-dir=.fb-offline  x build-aux/io.github.tduarte.Scribe.flathub.yaml
+#   flatpak-builder --download-only --state-dir=.fb-offline  x build-aux/io.github.tduarte.Scribe.yaml
 #   flatpak-builder --sandbox --disable-download --state-dir=.fb-offline --force-clean \
-#       build-dir build-aux/io.github.tduarte.Scribe.flathub.yaml
+#       build-dir build-aux/io.github.tduarte.Scribe.yaml
 app-id: io.github.tduarte.Scribe
 runtime: org.gnome.Platform
 runtime-version: '50'
