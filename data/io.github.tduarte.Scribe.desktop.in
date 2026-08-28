@@ -1,0 +1,13 @@
+[Desktop Entry]
+Name=Scribe
+GenericName=Dictation
+Comment=Hold a key, speak, and your words appear
+Exec=scribe
+Icon=io.github.tduarte.Scribe
+Terminal=false
+Type=Application
+Categories=Utility;TextTools;
+Keywords=dictation;speech;voice;transcribe;whisper;stt;text;
+StartupNotify=true
+DBusActivatable=true
+X-GNOME-UsesNotifications=true

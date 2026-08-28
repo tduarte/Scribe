@@ -1,0 +1,132 @@
+app-id: io.github.tduarte.Scribe
+runtime: org.gnome.Platform
+runtime-version: '50'
+sdk: org.gnome.Sdk
+command: scribe
+
+finish-args:
+  - --share=ipc
+  - --socket=wayland
+  - --socket=fallback-x11
+  # GPU: Vulkan compute for whisper.cpp, and GTK4 rendering.
+  - --device=dri
+  # Microphone. Flatpak has no capture-only audio permission and no microphone
+  # portal exists, so this is the only available mechanism.
+  - --socket=pulseaudio
+  - --filesystem=xdg-run/pipewire-0:ro
+  # Downloading speech models on first run.
+  - --share=network
+  #
+  # Deliberately absent:
+  #   --device=all      would be needed for ydotool/uinput; rejected by
+  #                     flatpak-builder-lint and unnecessary given the
+  #                     RemoteDesktop portal.
+  #   --filesystem=*    models live in the app's own data directory.
+  #   --talk-name=...   every portal is reachable from any sandbox by default.
+
+cleanup:
+  - /include
+  - /lib/cmake
+  - /lib/pkgconfig
+  - /share/man
+  - '*.a'
+  - '*.la'
+
+modules:
+  # ggml-vulkan does find_package(SPIRV-Headers CONFIG REQUIRED) and the GNOME
+  # SDK does not ship it. Headers only -- nothing is needed at runtime.
+  - name: spirv-headers
+    buildsystem: cmake-ninja
+    config-opts:
+      - -DCMAKE_BUILD_TYPE=Release
+      - -DSPIRV_HEADERS_SKIP_EXAMPLES=ON
+    cleanup:
+      - '*'
+    sources:
+      - type: archive
+        url: https://github.com/KhronosGroup/SPIRV-Headers/archive/refs/tags/vulkan-sdk-1.4.335.0.tar.gz
+        sha256: 1c47ca6342ebe86f57b46b8dbeb266fa655a1ca8e10d07e45370ff2d9c36312e
+
+  # numpy, requests, tqdm, platformdirs -- pywhispercpp's install_requires.
+  - python3-deps.yaml
+
+  # pywhispercpp bundles the complete whisper.cpp and pybind11 trees, so this
+  # builds with no network access.
+  #
+  # Its setup.py turns EVERY environment variable into a -D CMake define
+  # (setup.py:159), which is the documented way GGML_VULKAN is passed, and it
+  # also honours CMAKE_ARGS (setup.py:91). Hence:
+  #   PYWHISPERCPP_VERSION      version.txt is absent from the sdist
+  #   CMAKE_POLICY_VERSION_MINIMUM  its CMakeLists declares 3.4...3.18, which
+  #                             the SDK's CMake 4.x refuses
+  #   GGML_NATIVE=OFF           defaults ON and would bake in -march=native
+  #   CMAKE_INSTALL_RPATH       libwhisper/libggml land beside the extension
+  #                             module, and the RPATH is only set automatically
+  #                             for editable installs
+  - name: pywhispercpp
+    buildsystem: simple
+    build-commands:
+      # The sdist declares [tool.setuptools_scm], so its version comes from git
+      # metadata that a release tarball does not carry -- it builds as 0.0.0 and
+      # pip then rejects it as inconsistent. setup() has no version= of its own,
+      # so drop the scm section and wire in the version function the package
+      # already ships.
+      - sed -i '/^\[tool\.setuptools_scm\]/,$d' pyproject.toml
+      - sed -i 's/^    name="pywhispercpp",/    name="pywhispercpp",\n    version=get_version(),/' setup.py
+      - |
+        set -eu
+        # setup.py turns every environment variable into a -D CMake define
+        # (setup.py:159); that is the documented route for GGML_VULKAN.
+        export PYWHISPERCPP_VERSION=1.5.1
+        export CMAKE_POLICY_VERSION_MINIMUM=3.5   # its CMakeLists declares 3.4...3.18
+        export CMAKE_GENERATOR=Ninja
+        export GGML_VULKAN=1
+        export GGML_NATIVE=OFF                    # defaults ON; would bake in -march=native
+        export GGML_AVX=ON
+        export GGML_AVX2=ON
+        export GGML_F16C=ON
+        export GGML_FMA=ON
+        # libwhisper/libggml land beside the extension module, and the RPATH is
+        # only set automatically for editable installs.
+        export CMAKE_ARGS="-DCMAKE_INSTALL_RPATH=\$ORIGIN -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON"
+        pip3 install --no-index --no-build-isolation --no-deps \
+            --prefix="${FLATPAK_DEST}" --verbose .
+      # Belt and braces, in case the RPATH above did not take.
+      - |
+        set -eu
+        site="$(find "${FLATPAK_DEST}/lib" -maxdepth 2 -type d -name site-packages | head -n1)"
+        find "${site}" -maxdepth 2 \( -name 'libggml*.so*' -o -name 'libwhisper*.so*' \) \
+          -exec ln -sfn {} "${FLATPAK_DEST}/lib/" \;
+    sources:
+      - type: archive
+        url: https://files.pythonhosted.org/packages/9f/35/610787a277e177e6b7983277a35a2969c0876b46c0d889bc6a0c4b4ac4a7/pywhispercpp-1.5.1.tar.gz
+        sha256: 5df897e5dd9d9f16804fc937bd85b9f5880a0b29a55f8843585e0e03d76195e5
+
+  # Silero VAD is only 885 KB, so it ships with the app: silence trimming works
+  # before any speech model has been downloaded, and it is what stops large-v3
+  # inventing words during pauses.
+  - name: silero-vad-model
+    buildsystem: simple
+    build-commands:
+      - install -Dm644 ggml-silero-v6.2.0.bin
+          /app/share/scribe/models/ggml-silero-v6.2.0.bin
+    sources:
+      - type: file
+        url: https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v6.2.0.bin
+        sha256: 2aa269b785eeb53a82983a20501ddf7c1d9c48e33ab63a41391ac6c9f7fb6987
+        dest-filename: ggml-silero-v6.2.0.bin
+
+  - name: scribe
+    buildsystem: meson
+    config-opts:
+      - -Dbuildtype=release
+    sources:
+      - type: dir
+        path: ..
+        skip:
+          - .flatpak-builder
+          - .git
+          - .venv
+          - build
+          - build-spike
+          - repo

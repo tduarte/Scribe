@@ -1,0 +1,237 @@
+"""Global hotkey handling via the GlobalShortcuts portal.
+
+Measured behaviour on GNOME 50 / mutter 50 (see HoldDetector for why this
+matters): the portal spec says `Activated` fires on key-down and `Deactivated`
+on key-up, but GNOME never emits `Deactivated` at all. Instead it forwards
+keyboard auto-repeat as a stream of `Activated` signals:
+
+    key down ──▶ Activated
+                 (~500 ms auto-repeat delay, silence)
+                 Activated, Activated, ...  every ~30 ms while held
+    key up   ──▶ (nothing)
+
+So a press-and-hold has to be reconstructed from the timing of that stream. A
+quick tap produces exactly one `Activated` and nothing else.
+
+If a compositor ever does send `Deactivated`, we use it and switch the timing
+heuristic off, so this degrades to the correct behaviour automatically.
+"""
+
+from __future__ import annotations
+
+import logging
+from typing import Callable
+
+from gi.repository import GLib
+
+from .base import Portal, PortalError, new_token
+
+log = logging.getLogger(__name__)
+
+IFACE = "org.freedesktop.portal.GlobalShortcuts"
+
+SHORTCUT_DICTATE = "dictate"
+SHORTCUT_CANCEL = "cancel"
+
+# Silence long enough to mean "released", once auto-repeat has demonstrably
+# started. The observed repeat interval is 30-31 ms, so 120 ms is ~4 missed
+# repeats: comfortably clear of jitter, still imperceptible to the user.
+REPEAT_GAP_MS = 120
+
+# Before any repeat has arrived we cannot tell a hold from a tap, because the
+# auto-repeat delay is ~500 ms of silence. Wait past that delay before deciding
+# the key came back up. This is also why a tap records for ~650 ms rather than
+# stopping instantly -- harmless for dictation, and it doubles as a trailing
+# buffer that catches the last syllable.
+INITIAL_GAP_MS = 650
+
+
+class HoldDetector:
+    """Turns GNOME's `Activated` stream into clean press/release callbacks."""
+
+    def __init__(
+        self,
+        on_press: Callable[[], None],
+        on_release: Callable[[], None],
+    ) -> None:
+        self._on_press = on_press
+        self._on_release = on_release
+        self._timeout: int | None = None
+        self._held = False
+        self._saw_repeat = False
+        # Set once a real Deactivated is observed; the heuristic then stands down.
+        self.compositor_sends_deactivated = False
+
+    @property
+    def held(self) -> bool:
+        return self._held
+
+    def activated(self) -> None:
+        if not self._held:
+            self._held = True
+            self._saw_repeat = False
+            self._on_press()
+        else:
+            # A second event while held means auto-repeat is running, so we can
+            # tighten the release timeout dramatically.
+            self._saw_repeat = True
+
+        if self.compositor_sends_deactivated:
+            return
+        self._arm(REPEAT_GAP_MS if self._saw_repeat else INITIAL_GAP_MS)
+
+    def deactivated(self) -> None:
+        """A real key-up from the compositor: authoritative, so trust it."""
+        if not self.compositor_sends_deactivated:
+            log.info("compositor emits Deactivated; disabling the timing heuristic")
+            self.compositor_sends_deactivated = True
+        self._disarm()
+        self._release()
+
+    def cancel(self) -> None:
+        """Abandon the current hold without firing the release callback."""
+        self._disarm()
+        self._held = False
+        self._saw_repeat = False
+
+    # -- internals -------------------------------------------------------
+
+    def _arm(self, delay_ms: int) -> None:
+        self._disarm()
+        self._timeout = GLib.timeout_add(delay_ms, self._on_timeout)
+
+    def _disarm(self) -> None:
+        if self._timeout is not None:
+            GLib.source_remove(self._timeout)
+            self._timeout = None
+
+    def _on_timeout(self) -> bool:
+        self._timeout = None
+        self._release()
+        return GLib.SOURCE_REMOVE
+
+    def _release(self) -> None:
+        if not self._held:
+            return
+        self._held = False
+        self._saw_repeat = False
+        self._on_release()
+
+
+class ShortcutManager:
+    """Owns the GlobalShortcuts session and reports dictation press/release."""
+
+    def __init__(
+        self,
+        on_press: Callable[[], None],
+        on_release: Callable[[], None],
+        on_cancel: Callable[[], None],
+        on_error: Callable[[PortalError], None],
+        *,
+        preferred_trigger: str = "CTRL+ALT+space",
+    ) -> None:
+        self.portal = Portal()
+        self.preferred_trigger = preferred_trigger
+        self.session: str | None = None
+        self.triggers: dict[str, str] = {}
+        self._on_cancel = on_cancel
+        self._on_error = on_error
+        self._subs: list[int] = []
+        self.detector = HoldDetector(on_press, on_release)
+        self.on_triggers_changed: Callable[[], None] | None = None
+
+    def start(self) -> None:
+        self._subs = [
+            self.portal.subscribe_signal(IFACE, "Activated", self._activated),
+            self.portal.subscribe_signal(IFACE, "Deactivated", self._deactivated),
+            self.portal.subscribe_signal(IFACE, "ShortcutsChanged", self._changed),
+        ]
+        self.portal.request_call(
+            IFACE, "CreateSession",
+            lambda token: GLib.Variant("(a{sv})", ({
+                "handle_token": GLib.Variant("s", token),
+                "session_handle_token": GLib.Variant("s", new_token("scribe_sc")),
+            },)),
+            self._created,
+        )
+
+    def stop(self) -> None:
+        self.detector.cancel()
+        for sub in self._subs:
+            self.portal.unsubscribe(sub)
+        self._subs.clear()
+        if self.session:
+            self.portal.close_session(self.session)
+            self.session = None
+
+    def configure(self, parent_window: str = "") -> None:
+        """Open GNOME's shortcut editor for our existing session.
+
+        BindShortcuts may only be called once per session, so rebinding has to go
+        through here rather than by tearing the session down.
+        """
+        if not self.session:
+            return
+        try:
+            self.portal.call_noreply(
+                IFACE, "ConfigureShortcuts",
+                GLib.Variant("(osa{sv})", (self.session, parent_window, {})),
+            )
+        except GLib.Error as exc:
+            log.warning("ConfigureShortcuts unavailable: %s", exc.message)
+
+    # -- portal plumbing -------------------------------------------------
+
+    def _created(self, results, error) -> None:
+        if error:
+            self._on_error(error)
+            return
+        self.session = results["session_handle"]
+        shortcuts = [
+            (SHORTCUT_DICTATE, {
+                "description": GLib.Variant("s", "Hold to dictate"),
+                "preferred_trigger": GLib.Variant("s", self.preferred_trigger),
+            }),
+            (SHORTCUT_CANCEL, {
+                "description": GLib.Variant("s", "Cancel dictation"),
+                "preferred_trigger": GLib.Variant("s", "CTRL+ALT+Escape"),
+            }),
+        ]
+        self.portal.request_call(
+            IFACE, "BindShortcuts",
+            lambda token: GLib.Variant(
+                "(oa(sa{sv})sa{sv})",
+                (self.session, shortcuts, "",
+                 {"handle_token": GLib.Variant("s", token)}),
+            ),
+            self._bound,
+        )
+
+    def _bound(self, results, error) -> None:
+        if error:
+            self._on_error(error)
+            return
+        self._record_triggers(results.get("shortcuts", []))
+
+    def _record_triggers(self, shortcuts) -> None:
+        self.triggers = {
+            sid: meta.get("trigger_description", "")
+            for sid, meta in shortcuts
+        }
+        log.info("bound shortcuts: %s", self.triggers)
+        if self.on_triggers_changed:
+            self.on_triggers_changed()
+
+    def _activated(self, session, shortcut_id, timestamp, options) -> None:
+        if shortcut_id == SHORTCUT_DICTATE:
+            self.detector.activated()
+        elif shortcut_id == SHORTCUT_CANCEL:
+            self.detector.cancel()
+            self._on_cancel()
+
+    def _deactivated(self, session, shortcut_id, timestamp, options) -> None:
+        if shortcut_id == SHORTCUT_DICTATE:
+            self.detector.deactivated()
+
+    def _changed(self, session, shortcuts) -> None:
+        self._record_triggers(shortcuts)

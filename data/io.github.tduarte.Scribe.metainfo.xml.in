@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.tduarte.Scribe</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+
+  <name>Scribe</name>
+  <summary>Dictate anywhere with your voice</summary>
+
+  <developer id="io.github.tduarte">
+    <name>Tiago Duarte</name>
+  </developer>
+
+  <description>
+    <p>
+      Scribe turns speech into text anywhere on your desktop. Hold a shortcut,
+      say what you mean, and release — the words appear in whatever you were
+      typing into.
+    </p>
+    <p>
+      Transcription runs entirely on your own machine using Whisper, with
+      optional GPU acceleration. Nothing you say is sent anywhere, and once a
+      model is downloaded Scribe works completely offline.
+    </p>
+    <p>Features:</p>
+    <ul>
+      <li>Push-to-talk or toggle dictation from a global keyboard shortcut</li>
+      <li>Runs locally — your voice never leaves the machine</li>
+      <li>GPU accelerated with Vulkan, falling back to CPU</li>
+      <li>Voice activity detection trims silence and avoids hallucinated text</li>
+      <li>Speaks 99 languages, and can translate to English as it transcribes</li>
+      <li>A searchable history of everything you have dictated</li>
+      <li>Custom vocabulary for names and jargon, plus filler-word removal</li>
+    </ul>
+  </description>
+
+  <launchable type="desktop-id">io.github.tduarte.Scribe.desktop</launchable>
+
+  <url type="homepage">https://github.com/tduarte/Scribe</url>
+  <url type="bugtracker">https://github.com/tduarte/Scribe/issues</url>
+  <url type="vcs-browser">https://github.com/tduarte/Scribe</url>
+
+  <screenshots>
+    <screenshot type="default">
+      <image>https://raw.githubusercontent.com/tduarte/Scribe/main/data/screenshots/main.png</image>
+      <caption>Dictating into a text editor</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://raw.githubusercontent.com/tduarte/Scribe/main/data/screenshots/models.png</image>
+      <caption>Choosing a speech recognition model</caption>
+    </screenshot>
+  </screenshots>
+
+  <branding>
+    <color type="primary" scheme_preference="light">#c9d8f0</color>
+    <color type="primary" scheme_preference="dark">#1c2b45</color>
+  </branding>
+
+  <content_rating type="oars-1.1"/>
+
+  <requires>
+    <display_length compare="ge">360</display_length>
+  </requires>
+  <recommends>
+    <control>keyboard</control>
+    <control>pointing</control>
+  </recommends>
+
+  <translation type="gettext">scribe</translation>
+
+  <releases>
+    <release version="0.1.0" date="2026-08-27">
+      <description>
+        <p>First release.</p>
+      </description>
+    </release>
+  </releases>
+</component>

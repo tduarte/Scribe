@@ -1,0 +1,16 @@
+.flatpak-builder/
+build/
+build-dir/
+repo/
+_build/
+__pycache__/
+*.pyc
+.venv/
+spikes/*.json
+*.raw
+*.wav.out
+
+# Generated from the .in templates at build time
+data/io.github.tduarte.Scribe.desktop
+data/io.github.tduarte.Scribe.metainfo.xml
+data/io.github.tduarte.Scribe.service

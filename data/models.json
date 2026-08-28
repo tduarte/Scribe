@@ -1,0 +1,112 @@
+{
+  "catalog_version": 1,
+  "source": "https://huggingface.co/ggerganov/whisper.cpp",
+  "vad": {
+    "filename": "ggml-silero-v6.2.0.bin",
+    "url": "https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v6.2.0.bin",
+    "sha256": "2aa269b785eeb53a82983a20501ddf7c1d9c48e33ab63a41391ac6c9f7fb6987",
+    "size": 885098
+  },
+  "default_model": "turbo",
+  "models": [
+    {
+      "id": "tiny",
+      "name": "Tiny",
+      "filename": "ggml-tiny-q5_1.bin",
+      "url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny-q5_1.bin",
+      "sha256": "818710568da3ca15689e31a743197b520007872ff9576237bda97bd1b469c3d7",
+      "size": 32152673,
+      "languages": 99,
+      "tier": 1,
+      "translate": true
+    },
+    {
+      "id": "base",
+      "name": "Base",
+      "filename": "ggml-base-q5_1.bin",
+      "url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base-q5_1.bin",
+      "sha256": "422f1ae452ade6f30a004d7e5c6a43195e4433bc370bf23fac9cc591f01a8898",
+      "size": 59707625,
+      "languages": 99,
+      "tier": 2,
+      "translate": true
+    },
+    {
+      "id": "base.en",
+      "name": "Base (English)",
+      "filename": "ggml-base.en-q5_1.bin",
+      "url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en-q5_1.bin",
+      "sha256": "4baf70dd0d7c4247ba2b81fafd9c01005ac77c2f9ef064e00dcf195d0e2fdd2f",
+      "size": 59721011,
+      "languages": 1,
+      "tier": 2,
+      "translate": false
+    },
+    {
+      "id": "small",
+      "name": "Small",
+      "filename": "ggml-small-q5_1.bin",
+      "url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small-q5_1.bin",
+      "sha256": "ae85e4a935d7a567bd102fe55afc16bb595bdb618e11b2fc7591bc08120411bb",
+      "size": 190085487,
+      "languages": 99,
+      "tier": 3,
+      "translate": true
+    },
+    {
+      "id": "small.en",
+      "name": "Small (English)",
+      "filename": "ggml-small.en-q5_1.bin",
+      "url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.en-q5_1.bin",
+      "sha256": "bfdff4894dcb76bbf647d56263ea2a96645423f1669176f4844a1bf8e478ad30",
+      "size": 190098681,
+      "languages": 1,
+      "tier": 3,
+      "translate": false
+    },
+    {
+      "id": "medium",
+      "name": "Medium",
+      "filename": "ggml-medium-q5_0.bin",
+      "url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium-q5_0.bin",
+      "sha256": "19fea4b380c3a618ec4723c3eef2eb785ffba0d0538cf43f8f235e7b3b34220f",
+      "size": 539212467,
+      "languages": 99,
+      "tier": 4,
+      "translate": true
+    },
+    {
+      "id": "turbo",
+      "name": "Large v3 Turbo",
+      "filename": "ggml-large-v3-turbo-q5_0.bin",
+      "url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin",
+      "sha256": "394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2",
+      "size": 574041195,
+      "languages": 99,
+      "tier": 5,
+      "translate": true
+    },
+    {
+      "id": "turbo-q8",
+      "name": "Large v3 Turbo HQ",
+      "filename": "ggml-large-v3-turbo-q8_0.bin",
+      "url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q8_0.bin",
+      "sha256": "317eb69c11673c9de1e1f0d459b253999804ec71ac4c23c17ecf5fbe24e259a1",
+      "size": 874188075,
+      "languages": 99,
+      "tier": 5,
+      "translate": true
+    },
+    {
+      "id": "large-v3",
+      "name": "Large v3",
+      "filename": "ggml-large-v3-q5_0.bin",
+      "url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-q5_0.bin",
+      "sha256": "d75795ecff3f83b5faa89d1900604ad8c780abd5739fae406de19f23ecd98ad1",
+      "size": 1081140203,
+      "languages": 99,
+      "tier": 6,
+      "translate": true
+    }
+  ]
+}

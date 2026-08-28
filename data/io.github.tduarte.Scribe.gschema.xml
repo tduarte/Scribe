@@ -1,0 +1,168 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist gettext-domain="scribe">
+
+  <enum id="io.github.tduarte.Scribe.ActivationMode">
+    <value nick="push-to-talk" value="0"/>
+    <value nick="toggle"       value="1"/>
+  </enum>
+
+  <!-- Direct per-character typing is deliberately absent: mutter resolves
+       keysyms against the active keyboard layout and silently drops anything
+       not on it, so "cafe" survives but "cafe" with an accent does not.
+       See docs/PORTAL-FINDINGS.md. -->
+  <enum id="io.github.tduarte.Scribe.OutputMode">
+    <value nick="paste"     value="0"/>
+    <value nick="clipboard" value="1"/>
+  </enum>
+
+  <enum id="io.github.tduarte.Scribe.PasteChord">
+    <value nick="ctrl-v"       value="0"/>
+    <value nick="ctrl-shift-v" value="1"/>
+    <value nick="shift-insert" value="2"/>
+  </enum>
+
+  <enum id="io.github.tduarte.Scribe.Accelerator">
+    <value nick="auto" value="0"/>
+    <value nick="gpu"  value="1"/>
+    <value nick="cpu"  value="2"/>
+  </enum>
+
+  <enum id="io.github.tduarte.Scribe.SubmitKey">
+    <value nick="enter"       value="0"/>
+    <value nick="ctrl-enter"  value="1"/>
+    <value nick="super-enter" value="2"/>
+  </enum>
+
+  <schema id="io.github.tduarte.Scribe" path="/io/github/tduarte/Scribe/">
+
+    <!-- Window -->
+    <key name="window-width"     type="i"><default>820</default></key>
+    <key name="window-height"    type="i"><default>620</default></key>
+    <key name="window-maximized" type="b"><default>false</default></key>
+
+    <!-- Activation -->
+    <key name="activation-mode" enum="io.github.tduarte.Scribe.ActivationMode">
+      <default>'push-to-talk'</default>
+      <summary>How dictation is started</summary>
+      <description>
+        Hold the shortcut to dictate, or press it once to start and again to stop.
+      </description>
+    </key>
+    <key name="max-recording-seconds" type="i">
+      <default>60</default>
+      <range min="5" max="600"/>
+      <summary>Safety limit on a single recording</summary>
+      <description>
+        Recording stops after this long even if the shortcut release is never
+        delivered, so a missed key-up event cannot leave the microphone open.
+      </description>
+    </key>
+    <key name="extra-buffer-ms" type="i">
+      <default>0</default>
+      <range min="0" max="2000"/>
+      <summary>Keep recording briefly after the key is released</summary>
+    </key>
+
+    <!-- Audio -->
+    <key name="input-device" type="s">
+      <default>''</default>
+      <summary>Microphone to record from; empty means the system default</summary>
+    </key>
+    <key name="keep-stream-open-seconds" type="i">
+      <default>30</default>
+      <range min="0" max="300"/>
+      <summary>Hold the microphone open after recording to cut startup latency</summary>
+    </key>
+    <key name="mute-while-recording" type="b"><default>false</default></key>
+    <key name="sound-feedback"       type="b"><default>true</default></key>
+    <key name="sound-volume"         type="d">
+      <default>0.6</default>
+      <range min="0.0" max="1.0"/>
+    </key>
+
+    <!-- Model -->
+    <key name="active-model" type="s">
+      <default>''</default>
+      <summary>Identifier of the model to transcribe with</summary>
+    </key>
+    <key name="model-unload-seconds" type="i">
+      <default>300</default>
+      <summary>Release the model from memory after idling this long; 0 never unloads</summary>
+    </key>
+    <key name="accelerator" enum="io.github.tduarte.Scribe.Accelerator">
+      <default>'auto'</default>
+    </key>
+    <key name="thread-count" type="i">
+      <default>0</default>
+      <range min="0" max="64"/>
+      <summary>CPU threads to transcribe with; 0 chooses automatically</summary>
+    </key>
+
+    <!-- Transcription -->
+    <key name="language" type="s">
+      <default>'auto'</default>
+      <summary>Spoken language, or "auto" to detect it</summary>
+    </key>
+    <key name="translate-to-english" type="b"><default>false</default></key>
+    <key name="vad-enabled"          type="b"><default>true</default></key>
+    <key name="vad-threshold" type="d">
+      <default>0.5</default>
+      <range min="0.0" max="1.0"/>
+    </key>
+    <key name="vad-min-silence-ms" type="i">
+      <default>100</default>
+      <range min="0" max="5000"/>
+    </key>
+    <key name="vad-speech-pad-ms" type="i">
+      <default>30</default>
+      <range min="0" max="1000"/>
+    </key>
+
+    <!-- Output -->
+    <key name="output-mode" enum="io.github.tduarte.Scribe.OutputMode">
+      <default>'paste'</default>
+      <summary>How transcribed text reaches the focused application</summary>
+    </key>
+    <key name="paste-chord" enum="io.github.tduarte.Scribe.PasteChord">
+      <default>'ctrl-v'</default>
+    </key>
+    <key name="restore-clipboard"     type="b"><default>true</default></key>
+    <key name="append-trailing-space" type="b"><default>false</default></key>
+    <key name="auto-submit"           type="b"><default>false</default></key>
+    <key name="auto-submit-key" enum="io.github.tduarte.Scribe.SubmitKey">
+      <default>'enter'</default>
+    </key>
+    <key name="paste-delay-ms" type="i">
+      <default>60</default>
+      <range min="0" max="2000"/>
+    </key>
+    <key name="remote-desktop-token" type="s">
+      <default>''</default>
+      <summary>Cached RemoteDesktop restore token, so consent is asked only once</summary>
+    </key>
+
+    <!-- Text post-processing -->
+    <key name="custom-words" type="as">
+      <default>[]</default>
+      <summary>Names and jargon to correct transcriptions towards</summary>
+    </key>
+    <key name="word-correction-threshold" type="d">
+      <default>0.18</default>
+      <range min="0.0" max="1.0"/>
+    </key>
+    <key name="remove-filler-words" type="b"><default>true</default></key>
+    <key name="custom-filler-words" type="as"><default>[]</default></key>
+    <key name="capitalize-first"    type="b"><default>true</default></key>
+
+    <!-- System -->
+    <key name="autostart"          type="b"><default>false</default></key>
+    <key name="start-hidden"       type="b"><default>false</default></key>
+    <key name="history-enabled"    type="b"><default>true</default></key>
+    <key name="history-retention-days" type="i">
+      <default>0</default>
+      <summary>Delete history older than this many days; 0 keeps everything</summary>
+    </key>
+    <key name="onboarding-completed" type="b"><default>false</default></key>
+
+  </schema>
+</schemalist>

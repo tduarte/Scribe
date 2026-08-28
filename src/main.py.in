@@ -1,0 +1,25 @@
+#!/usr/bin/env python3
+"""Scribe entry point. Configured by Meson; do not run this file directly."""
+
+import gettext
+import locale
+import os
+import sys
+
+VERSION = "@VERSION@"
+APP_ID = "@APP_ID@"
+PKGDATADIR = "@pkgdatadir@"
+LOCALEDIR = "@localedir@"
+
+sys.path.insert(1, os.path.join(PKGDATADIR, "scribe"))
+
+if __name__ == "__main__":
+    try:
+        locale.bindtextdomain("scribe", LOCALEDIR)
+        locale.textdomain("scribe")
+    except AttributeError:
+        pass
+    gettext.install("scribe", LOCALEDIR)
+
+    from application import main
+    sys.exit(main(version=VERSION, app_id=APP_ID, pkgdatadir=PKGDATADIR))

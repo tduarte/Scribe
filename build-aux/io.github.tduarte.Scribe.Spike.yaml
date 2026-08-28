@@ -1,0 +1,40 @@
+# Throwaway manifest for the Phase 0 portal spikes.
+# Same app ID as the real app so consent grants and permission state carry over.
+# Deliberately contains no whisper.cpp: this must build in seconds.
+app-id: io.github.tduarte.Scribe
+runtime: org.gnome.Platform
+runtime-version: '50'
+sdk: org.gnome.Sdk
+command: scribe
+
+finish-args:
+  - --share=ipc
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --device=dri
+  - --socket=pulseaudio
+  - --filesystem=xdg-run/pipewire-0:ro
+  - --share=network
+
+modules:
+  - name: scribe-spike
+    buildsystem: simple
+    build-commands:
+      - install -Dm644 src/portals/base.py     /app/share/scribe/portals/base.py
+      - install -Dm644 src/portals/__init__.py /app/share/scribe/portals/__init__.py
+      - install -Dm755 spikes/spike_shortcuts.py /app/bin/spike-shortcuts
+      - install -Dm755 spikes/spike_inject.py    /app/bin/spike-inject
+      - install -Dm755 spikes/stub-scribe.sh     /app/bin/scribe
+      - install -Dm644 data/io.github.tduarte.Scribe.desktop
+          /app/share/applications/io.github.tduarte.Scribe.desktop
+      - install -Dm644 data/io.github.tduarte.Scribe.metainfo.xml
+          /app/share/metainfo/io.github.tduarte.Scribe.metainfo.xml
+      - install -Dm644 data/io.github.tduarte.Scribe.service
+          /app/share/dbus-1/services/io.github.tduarte.Scribe.service
+      - install -Dm644 data/icons/hicolor/scalable/apps/io.github.tduarte.Scribe.svg
+          /app/share/icons/hicolor/scalable/apps/io.github.tduarte.Scribe.svg
+      - install -Dm644 data/icons/hicolor/symbolic/apps/io.github.tduarte.Scribe-symbolic.svg
+          /app/share/icons/hicolor/symbolic/apps/io.github.tduarte.Scribe-symbolic.svg
+    sources:
+      - type: dir
+        path: ..

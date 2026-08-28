@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#62a0ea"/>
+      <stop offset="1" stop-color="#1a5fb4"/>
+    </linearGradient>
+    <linearGradient id="mic" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#deddda"/>
+    </linearGradient>
+  </defs>
+
+  <rect x="8" y="8" width="112" height="112" rx="26" fill="url(#bg)"/>
+  <rect x="8" y="8" width="112" height="112" rx="26" fill="none"
+        stroke="#0d3b7a" stroke-opacity=".35" stroke-width="2"/>
+
+  <!-- sound waves -->
+  <g fill="none" stroke="#ffffff" stroke-opacity=".45" stroke-width="5" stroke-linecap="round">
+    <path d="M32 52a34 34 0 0 0 0 24"/>
+    <path d="M96 52a34 34 0 0 1 0 24"/>
+  </g>
+
+  <!-- microphone -->
+  <rect x="52" y="26" width="24" height="46" rx="12" fill="url(#mic)"/>
+  <path d="M41 60a23 23 0 0 0 46 0" fill="none" stroke="#ffffff"
+        stroke-width="7" stroke-linecap="round"/>
+  <rect x="60" y="82" width="8" height="16" rx="4" fill="#ffffff"/>
+  <rect x="47" y="97" width="34" height="8" rx="4" fill="#ffffff"/>
+</svg>
