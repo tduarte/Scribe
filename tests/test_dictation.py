@@ -34,12 +34,27 @@ def settle(ms=60):
 
 
 class TestRecording:
-    def test_press_starts_recording_and_chimes(self):
+    def test_press_starts_recording(self):
         ctl, p, _ = build()
         ctl.on_shortcut_press()
         assert ctl.state is State.RECORDING
         assert p["recorder"].started
+
+    def test_start_cue_waits_for_real_audio(self):
+        # Opening the microphone is not instant. Chiming before audio flows
+        # invites the user to speak into a stream that is not up yet.
+        ctl, p, _ = build()
+        ctl.on_shortcut_press()
+        assert p["player"].played == [], "chimed before the microphone was ready"
+        p["recorder"].deliver_first_buffer()
         assert p["player"].played == [sounds.START]
+
+    def test_start_cue_is_suppressed_if_recording_already_ended(self):
+        ctl, p, _ = build()
+        ctl.on_shortcut_press()
+        ctl.cancel()
+        p["recorder"].deliver_first_buffer()
+        assert sounds.START not in p["player"].played
 
     def test_release_transcribes(self):
         ctl, p, _ = build()
@@ -121,6 +136,18 @@ class TestResults:
         ctl.on_result("  um hello world ", "en", 100)
         assert p["injector"].pasted[0]["text"] == "Hello world"
         assert ctl.state is State.IDLE
+
+    def test_completion_cue_plays_after_delivery(self):
+        ctl, p, _ = build()
+        ctl.on_shortcut_press(); ctl.on_shortcut_release()
+        ctl.on_result("hello world", "en", 100)
+        assert p["player"].played[-1] == sounds.DONE
+
+    def test_no_completion_cue_when_delivery_fails(self):
+        ctl, p, _ = build(injector=FakeInjector(ok=False, error="denied"))
+        ctl.on_shortcut_press(); ctl.on_shortcut_release()
+        ctl.on_result("hello", "en", 10)
+        assert sounds.DONE not in p["player"].played
 
     def test_result_is_recorded_in_history(self):
         ctl, p, _ = build()

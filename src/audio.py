@@ -71,11 +71,18 @@ class Recorder:
         self,
         *,
         on_level: Callable[[float], None] | None = None,
+        on_ready: Callable[[], None] | None = None,
         keep_warm_seconds: int = 30,
     ) -> None:
         init()
         self._on_level = on_level
+        # Fired when the first buffer of a recording actually arrives. Opening
+        # PipeWire is not instantaneous, so "recording started" and "the
+        # microphone is listening" are not the same moment -- the start cue must
+        # use the latter, or the user speaks into a stream that is not up yet.
+        self.on_ready = on_ready
         self.keep_warm_seconds = keep_warm_seconds
+        self._ready_fired = False
 
         self._pipeline: Gst.Pipeline | None = None
         self._sink = None
@@ -158,6 +165,10 @@ class Recorder:
 
         if self._capturing:
             self._chunks.append(data)
+            if not self._ready_fired:
+                self._ready_fired = True
+                if self.on_ready:
+                    self.on_ready()
         if self._on_level:
             self._on_level(_rms(data))
         return Gst.FlowReturn.OK
@@ -186,6 +197,7 @@ class Recorder:
         if not self.warm_up(device):
             return False
         self._chunks.clear()
+        self._ready_fired = False
         self._capturing = True
         return True
 

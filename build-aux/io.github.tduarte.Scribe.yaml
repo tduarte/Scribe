@@ -116,6 +116,24 @@ modules:
         sha256: 2aa269b785eeb53a82983a20501ddf7c1d9c48e33ab63a41391ac6c9f7fb6987
         dest-filename: ggml-silero-v6.2.0.bin
 
+  # The portal spikes, installed alongside the app so they exercise the real
+  # modules rather than a copy. See docs/PORTAL-FINDINGS.md.
+  - name: scribe-spikes
+    buildsystem: simple
+    build-commands:
+      - install -Dm755 spikes/spike_shortcuts.py /app/bin/spike-shortcuts
+      - install -Dm755 spikes/spike_inject.py    /app/bin/spike-inject
+    sources:
+      - type: dir
+        path: ..
+        skip:
+          - .flatpak-builder
+          - .git
+          - .venv
+          - build
+          - build-spike
+          - repo
+
   - name: scribe
     buildsystem: meson
     config-opts:

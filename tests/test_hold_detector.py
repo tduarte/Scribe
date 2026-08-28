@@ -100,22 +100,35 @@ def test_two_consecutive_holds_do_not_merge():
     assert rec.kinds == ["press", "release", "press", "release"], f"got {rec.kinds}"
 
 
-def test_real_deactivated_takes_precedence():
+def test_real_deactivated_releases_immediately():
     rec = Recorder()
     det = HoldDetector(rec.press, rec.release)
     det.activated()
-    assert not det.compositor_sends_deactivated
     det.deactivated()
     assert det.compositor_sends_deactivated
     assert rec.kinds == ["press", "release"]
-    # With a cooperative compositor the timing heuristic must stay out of the way.
+    assert not det.held
+
+
+def test_timing_fallback_survives_a_deactivated():
+    """A compositor that sends Deactivated only sometimes must not strand us.
+
+    Disabling the timing fallback the first time a Deactivated arrives would
+    leave the microphone open until the safety watchdog fired if the next key-up
+    were not reported. The fallback therefore stays armed permanently.
+    """
+    rec = Recorder()
+    det = HoldDetector(rec.press, rec.release)
     det.activated()
-    assert det.held
-    loop = GLib.MainLoop()
-    GLib.timeout_add(INITIAL_GAP_MS + 300, lambda: (loop.quit(), False)[1])
-    loop.run()
-    assert det.held, "heuristic fired despite the compositor sending Deactivated"
-    assert rec.kinds == ["press", "release", "press"]
+    det.deactivated()
+    assert rec.kinds == ["press", "release"]
+
+    # Now a hold with no Deactivated at all: it must still release on timing.
+    run_schedule(det, [0], INITIAL_GAP_MS + 250)
+    assert rec.kinds == ["press", "release", "press", "release"], (
+        f"timing fallback did not fire after a Deactivated; got {rec.kinds}"
+    )
+    assert not det.held
 
 
 def test_cancel_suppresses_the_release_callback():

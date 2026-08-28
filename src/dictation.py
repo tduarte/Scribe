@@ -111,6 +111,9 @@ class DictationController:
             return
 
         self._cancel_unload_timer()
+        # The start cue fires from the audio callback, not from here, so it
+        # means "speak now" rather than "the request was made".
+        self.recorder.on_ready = self._on_audio_ready
         device = self.settings.get_string("input-device")
         self.recorder.keep_warm_seconds = self.settings.get_int("keep-stream-open-seconds")
         if not self.recorder.start(device):
@@ -119,8 +122,12 @@ class DictationController:
 
         self._partial.clear()
         self._set_state(State.RECORDING)
-        self.player.play(sounds.START)
         self._arm_watchdog()
+
+    def _on_audio_ready(self) -> None:
+        """The microphone is genuinely capturing now."""
+        if self.state is State.RECORDING:
+            self.player.play(sounds.START)
 
     def stop_recording(self) -> None:
         if self.state is not State.RECORDING:
@@ -242,6 +249,7 @@ class DictationController:
 
         def done(ok: bool, error: str) -> None:
             if ok:
+                self.player.play(sounds.DONE)
                 self._set_state(State.IDLE, "delivered")
             else:
                 self._fail(error or "Could not insert the text.")

@@ -50,6 +50,23 @@ as a trailing buffer that catches the last syllable.
 If a compositor ever does send `Deactivated`, `HoldDetector` uses it and switches
 the heuristic off permanently, so this degrades to correct behaviour on its own.
 
+Confirmed end to end with `spikes/spike_shortcuts.py`, which drives the real
+`HoldDetector`. A 2.2 second hold produced 60 `Activated` events, zero
+`Deactivated`, and a release inferred **121 ms** after the final event:
+
+```
+  Activated  gap=       0 ms   >>> PRESS inferred
+  Activated  gap=     499 ms   <- auto-repeat delay
+  Activated  gap=      30 ms   <- x58, rock steady
+  <<< RELEASE inferred: held 2182 ms, 121 ms after the last Activated
+```
+
+**The timing fallback must never be switched off.** An earlier version disabled
+it permanently the first time a `Deactivated` arrived, on the theory that a
+cooperative compositor should be trusted. A compositor that reports key-up only
+sometimes would then leave the microphone open until the safety watchdog fired.
+`Deactivated` now only short-circuits the timeout; it never replaces it.
+
 This is the same underlying problem as Handy's
 [#1539](https://github.com/cjpais/Handy/issues/1539) (push-to-talk rapid toggling
 from auto-repeat).
@@ -68,6 +85,17 @@ Bindings persist in GSettings under
 ```
 io.github.tduarte.Scribe: [('dictate', {'shortcuts': <['<Alt>space']>, ...})]
 ```
+
+## GlobalShortcuts: `ListShortcuts` is per session, not per app
+
+`ListShortcuts` reports only what the *calling session* has bound, so on a fresh
+session it always returns an empty array even when the app has shortcuts stored
+in GSettings. It therefore cannot be used to decide whether binding is needed --
+`BindShortcuts` must be called once per session regardless.
+
+GNOME does not re-prompt for a shortcut the user has already confirmed for this
+app ID. It prompts only for ids it has not seen before, so introducing a new
+shortcut id in a later release costs exactly one dialog.
 
 ## GlobalShortcuts: `ConfigureShortcuts` exists despite `version = 1`
 

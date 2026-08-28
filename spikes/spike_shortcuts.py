@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Phase 0 spike (a): does the GlobalShortcuts portal give us push-to-talk?
+"""Measure how GlobalShortcuts actually delivers a press-and-hold.
 
-We need `Activated` on key-down and `Deactivated` on key-up, with usable
-timestamps, so that holding a key can bracket a recording. Run this, approve the
-shortcut when GNOME asks, then hold and release the key a few times.
+Reports every Activated with the gap since the previous one, and the press and
+release that HoldDetector infers from them, so a mis-timed release is visible as
+a number rather than a feeling.
 
     flatpak run --command=spike-shortcuts io.github.tduarte.Scribe
 """
@@ -11,108 +11,130 @@ shortcut when GNOME asks, then hold and release the key a few times.
 from __future__ import annotations
 
 import sys
-import time
 
 import gi
 
 gi.require_version("Gtk", "4.0")
 from gi.repository import GLib  # noqa: E402
 
-sys.path.insert(0, "/app/share/scribe")
-from portals.base import Portal, PortalError, new_token  # noqa: E402
+sys.path.insert(0, "/app/share/scribe/scribe")
+from portals.base import Portal, new_token  # noqa: E402
+from portals.shortcuts import (INITIAL_GAP_MS, REPEAT_GAP_MS,  # noqa: E402
+                               HoldDetector)
 
 IFACE = "org.freedesktop.portal.GlobalShortcuts"
-SHORTCUT_ID = "dictate"
-PREFERRED = "CTRL+ALT+space"
+DICTATE = "dictate"
 
-held_since: dict[str, float] = {}
-presses = 0
+
+def now_ms() -> float:
+    return GLib.get_monotonic_time() / 1000.0
+
+
+class Probe:
+    def __init__(self) -> None:
+        self.portal = Portal()
+        self.session = None
+        self.last = 0.0
+        self.press_at = 0.0
+        self.last_activated = 0.0
+        self.holds = 0
+        self.deactivated_seen = 0
+        self.detector = HoldDetector(self.on_press, self.on_release)
+
+    def on_press(self) -> None:
+        self.press_at = now_ms()
+        print("    >>> PRESS inferred")
+
+    def on_release(self) -> None:
+        t = now_ms()
+        held = t - self.press_at
+        lag = t - self.last_activated
+        self.holds += 1
+        print(f"    <<< RELEASE inferred: held {held:.0f} ms, "
+              f"{lag:.0f} ms after the last Activated")
+        print(f"        (a release lag near {REPEAT_GAP_MS} ms is good; near "
+              f"{INITIAL_GAP_MS} ms means no auto-repeat arrived)\n")
+
+    def activated(self, session, sid, ts, options) -> None:
+        if sid != DICTATE:
+            print(f"    [other shortcut fired: {sid!r}]")
+            return
+        t = now_ms()
+        gap = t - self.last if self.last else 0.0
+        self.last = t
+        self.last_activated = t
+        print(f"  Activated  gap={gap:8.0f} ms")
+        self.detector.activated()
+
+    def deactivated(self, session, sid, ts, options) -> None:
+        self.deactivated_seen += 1
+        print(f"  Deactivated (id={sid!r})  <-- compositor reported key-up")
+        if sid == DICTATE:
+            self.detector.deactivated()
+
+    def start(self, loop) -> None:
+        self.portal.subscribe_signal(IFACE, "Activated", self.activated)
+        self.portal.subscribe_signal(IFACE, "Deactivated", self.deactivated)
+
+        def bound(results, error):
+            if error:
+                print(f"FAIL BindShortcuts: {error}")
+                loop.quit()
+                return
+            for sid, meta in results.get("shortcuts", []):
+                print(f"  {sid}: {meta.get('trigger_description', '?')}")
+            print("\nHold the dictate shortcut for ~2 s and release. Do it 3 times.\n")
+
+        def created(results, error):
+            if error:
+                print(f"FAIL CreateSession: {error}")
+                loop.quit()
+                return
+            self.session = results["session_handle"]
+            # ListShortcuts only reports what *this* session bound, so it is
+            # always empty here; we must bind to receive Activated at all.
+            # GNOME does not re-prompt for shortcuts already confirmed for this
+            # app ID, so this is silent once the app has been run.
+            shortcuts = [
+                ("dictate", {
+                    "description": GLib.Variant("s", "Hold to dictate"),
+                    "preferred_trigger": GLib.Variant("s", "CTRL+ALT+space"),
+                }),
+                ("cancel", {
+                    "description": GLib.Variant("s", "Cancel dictation"),
+                    "preferred_trigger": GLib.Variant("s", "CTRL+ALT+Escape"),
+                }),
+            ]
+            self.portal.request_call(
+                IFACE, "BindShortcuts",
+                lambda tok: GLib.Variant("(oa(sa{sv})sa{sv})", (
+                    self.session, shortcuts, "",
+                    {"handle_token": GLib.Variant("s", tok)})),
+                bound,
+            )
+
+        self.portal.request_call(
+            IFACE, "CreateSession",
+            lambda tok: GLib.Variant("(a{sv})", ({
+                "handle_token": GLib.Variant("s", tok),
+                "session_handle_token": GLib.Variant("s", new_token("probe")),
+            },)),
+            created,
+        )
 
 
 def main() -> int:
     loop = GLib.MainLoop()
-    portal = Portal()
-    state: dict[str, str] = {}
-
-    def on_activated(session, shortcut_id, timestamp, options):
-        global presses
-        presses += 1
-        held_since[shortcut_id] = time.monotonic()
-        print(f"  ACTIVATED   id={shortcut_id!r} portal_timestamp={timestamp}")
-
-    def on_deactivated(session, shortcut_id, timestamp, options):
-        start = held_since.pop(shortcut_id, None)
-        held = f"{(time.monotonic() - start) * 1000:.0f} ms" if start else "?"
-        print(f"  DEACTIVATED id={shortcut_id!r} portal_timestamp={timestamp}  held for {held}")
-        if start:
-            print("  -> press/release bracketing works; this is a usable push-to-talk primitive")
-
-    def on_changed(session, shortcuts):
-        print(f"  SHORTCUTS CHANGED: {shortcuts}")
-
-    portal.subscribe_signal(IFACE, "Activated", on_activated)
-    portal.subscribe_signal(IFACE, "Deactivated", on_deactivated)
-    portal.subscribe_signal(IFACE, "ShortcutsChanged", on_changed)
-
-    def bound(results, error):
-        if error:
-            print(f"FAIL  BindShortcuts: {error}")
-            if error.cancelled:
-                print("      You dismissed the dialog. The refusal is remembered; reset with:")
-                print("      flatpak permission-reset io.github.tduarte.Scribe")
-            loop.quit()
-            return
-        print("OK    BindShortcuts returned:")
-        for sid, meta in results.get("shortcuts", []):
-            desc = meta.get("description", "")
-            trig = meta.get("trigger_description", "(none reported)")
-            print(f"        {sid!r}: {desc!r}  trigger={trig!r}")
-        print()
-        print(f"Now hold {PREFERRED} (or whatever you bound) for ~1s and release. Ctrl+C to stop.")
-
-    def created(results, error):
-        if error:
-            print(f"FAIL  CreateSession: {error}")
-            loop.quit()
-            return
-        state["session"] = results["session_handle"]
-        print(f"OK    session = {state['session']}")
-
-        shortcuts = [(
-            SHORTCUT_ID,
-            {
-                "description": GLib.Variant("s", "Hold to dictate"),
-                "preferred_trigger": GLib.Variant("s", PREFERRED),
-            },
-        )]
-        portal.request_call(
-            IFACE, "BindShortcuts",
-            lambda token: GLib.Variant(
-                "(oa(sa{sv})sa{sv})",
-                (state["session"], shortcuts, "",
-                 {"handle_token": GLib.Variant("s", token)}),
-            ),
-            bound,
-        )
-
-    print(f"sender={portal.sender}")
-    portal.request_call(
-        IFACE, "CreateSession",
-        lambda token: GLib.Variant("(a{sv})", ({
-            "handle_token": GLib.Variant("s", token),
-            "session_handle_token": GLib.Variant("s", new_token("scribe_sess")),
-        },)),
-        created,
-    )
-
+    probe = Probe()
+    probe.start(loop)
     try:
         loop.run()
     except KeyboardInterrupt:
         pass
-    print(f"\n{presses} activation(s) seen.")
-    if state.get("session"):
-        portal.close_session(state["session"])
-    return 0 if presses else 1
+    print(f"\n{probe.holds} hold(s), {probe.deactivated_seen} Deactivated signal(s)")
+    if probe.session:
+        probe.portal.close_session(probe.session)
+    return 0
 
 
 if __name__ == "__main__":

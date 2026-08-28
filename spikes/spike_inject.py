@@ -25,7 +25,7 @@ import gi
 gi.require_version("Gtk", "4.0")
 from gi.repository import Gio, GLib  # noqa: E402
 
-sys.path.insert(0, "/app/share/scribe")
+sys.path.insert(0, "/app/share/scribe/scribe")
 from portals.base import PORTAL_BUS, PORTAL_PATH, Portal, new_token  # noqa: E402
 
 RD = "org.freedesktop.portal.RemoteDesktop"

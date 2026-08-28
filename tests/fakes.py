@@ -54,6 +54,12 @@ class FakeRecorder:
         self.started = False
         self.cancelled = 0
         self.last_error = None
+        self.on_ready = None
+
+    def deliver_first_buffer(self):
+        """Simulate PipeWire finally handing over audio."""
+        if self.on_ready:
+            self.on_ready()
 
     def start(self, device=""):
         if self.fail:

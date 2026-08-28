@@ -15,7 +15,7 @@ from gi.repository import Gtk
 
 log = logging.getLogger(__name__)
 
-START, STOP, ERROR = "start", "stop", "error"
+START, STOP, DONE, ERROR = "start", "stop", "done", "error"
 
 
 class SoundPlayer:

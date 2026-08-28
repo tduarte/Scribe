@@ -20,8 +20,8 @@ modules:
   - name: scribe-spike
     buildsystem: simple
     build-commands:
-      - install -Dm644 src/portals/base.py     /app/share/scribe/portals/base.py
-      - install -Dm644 src/portals/__init__.py /app/share/scribe/portals/__init__.py
+      - install -Dm644 src/portals/base.py     /app/share/scribe/scribe/portals/base.py
+      - install -Dm644 src/portals/__init__.py /app/share/scribe/scribe/portals/__init__.py
       - install -Dm755 spikes/spike_shortcuts.py /app/bin/spike-shortcuts
       - install -Dm755 spikes/spike_inject.py    /app/bin/spike-inject
       - install -Dm755 spikes/stub-scribe.sh     /app/bin/scribe

@@ -59,7 +59,10 @@ class HoldDetector:
         self._timeout: int | None = None
         self._held = False
         self._saw_repeat = False
-        # Set once a real Deactivated is observed; the heuristic then stands down.
+        self._last_activated: float = 0.0
+        # Purely informational. The timing fallback is NEVER disabled: a
+        # compositor that sends Deactivated only sometimes would otherwise leave
+        # the microphone open until the safety watchdog fired.
         self.compositor_sends_deactivated = False
 
     @property
@@ -67,26 +70,31 @@ class HoldDetector:
         return self._held
 
     def activated(self) -> None:
+        now = GLib.get_monotonic_time() / 1000.0
+        gap = now - self._last_activated if self._last_activated else 0.0
+        self._last_activated = now
+
         if not self._held:
             self._held = True
             self._saw_repeat = False
+            log.debug("hold: press")
             self._on_press()
         else:
-            # A second event while held means auto-repeat is running, so we can
-            # tighten the release timeout dramatically.
+            # A second event while held means auto-repeat is running, so the
+            # release timeout can be tightened dramatically.
+            if not self._saw_repeat:
+                log.debug("hold: auto-repeat detected after %.0f ms", gap)
             self._saw_repeat = True
 
-        if self.compositor_sends_deactivated:
-            return
         self._arm(REPEAT_GAP_MS if self._saw_repeat else INITIAL_GAP_MS)
 
     def deactivated(self) -> None:
-        """A real key-up from the compositor: authoritative, so trust it."""
+        """A real key-up from the compositor: authoritative, so release now."""
         if not self.compositor_sends_deactivated:
-            log.info("compositor emits Deactivated; disabling the timing heuristic")
+            log.info("compositor emitted Deactivated")
             self.compositor_sends_deactivated = True
         self._disarm()
-        self._release()
+        self._release("deactivated")
 
     def cancel(self) -> None:
         """Abandon the current hold without firing the release callback."""
@@ -107,14 +115,15 @@ class HoldDetector:
 
     def _on_timeout(self) -> bool:
         self._timeout = None
-        self._release()
+        self._release("timeout")
         return GLib.SOURCE_REMOVE
 
-    def _release(self) -> None:
+    def _release(self, why: str) -> None:
         if not self._held:
             return
         self._held = False
         self._saw_repeat = False
+        log.debug("hold: release (%s)", why)
         self._on_release()
 
 
@@ -187,25 +196,12 @@ class ShortcutManager:
             self._on_error(error)
             return
         self.session = results["session_handle"]
-        # GNOME shows its shortcut editor on every BindShortcuts call, so binding
-        # unconditionally at startup pops a dialog each time the app launches.
-        # Bindings persist per app ID, so ask what is already registered first
-        # and only bind when there is genuinely nothing there.
-        self.portal.request_call(
-            IFACE, "ListShortcuts",
-            lambda token: GLib.Variant(
-                "(oa{sv})",
-                (self.session, {"handle_token": GLib.Variant("s", token)}),
-            ),
-            self._listed,
-        )
-
-    def _listed(self, results, error) -> None:
-        existing = (results or {}).get("shortcuts", []) if not error else []
-        if existing:
-            log.info("reusing shortcuts already registered for this app")
-            self._record_triggers(existing)
-            return
+        # BindShortcuts must be called once per session -- ListShortcuts reports
+        # only what the *current* session has bound, so it is always empty here
+        # and cannot be used to skip this. GNOME does not re-prompt for
+        # shortcuts the user has already confirmed for this app ID; it prompts
+        # only for ones it has never seen, which is why adding a new shortcut id
+        # in a later release will ask the user once.
         self._bind()
 
     def _bind(self) -> None:
