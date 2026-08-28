@@ -144,8 +144,7 @@ class PreferencesDialog(Adw.PreferencesDialog):
 
         limit = Adw.SpinRow.new_with_range(0, 100, 1)
         limit.set_title("How many to keep")
-        limit.set_subtitle("Older transcripts are erased from the database, "
-                           "not just hidden")
+        limit.set_subtitle("Anything older is erased from this computer")
         s.bind("history-limit", limit, "value", Gio.SettingsBindFlags.DEFAULT)
         s.bind("history-enabled", limit, "sensitive", Gio.SettingsBindFlags.GET)
         privacy.add(limit)

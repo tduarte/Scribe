@@ -11,21 +11,24 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Fast feedback: the pure-Python units run on a plain runner in seconds,
-  # so a logic error does not wait on a whisper.cpp build to be reported.
+  # Fast feedback: the unit suite runs on a plain runner in seconds, so a logic
+  # error does not wait on a whisper.cpp build to be reported.
   tests:
     name: Unit tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      # The suite imports GLib, so it needs the distro PyGObject rather than a
-      # clean setup-python interpreter, which cannot see the system `gi`.
-      # GLib is the only typelib required -- no Gtk, no Gst.
-      - name: Install PyGObject and pytest
+      # The suite imports the app modules, which pull in GTK, libadwaita,
+      # GStreamer and libsoup at module scope, so it needs the distro PyGObject
+      # and those typelibs -- a clean setup-python interpreter cannot see `gi`.
+      # Namespaces come from `require_version` calls in src/ and tests/.
+      - name: Install PyGObject, typelibs and pytest
         run: |
           sudo apt-get update
-          sudo apt-get install -y python3-gi python3-pytest
+          sudo apt-get install -y \
+            python3-gi python3-pytest \
+            gir1.2-gtk-4.0 gir1.2-adw-1 gir1.2-gstreamer-1.0 gir1.2-soup-3.0
 
       - name: Run pytest
         run: python3 -m pytest tests -q

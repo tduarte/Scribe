@@ -69,9 +69,16 @@
   <translation type="gettext">scribe</translation>
 
   <releases>
-    <release version="0.1.0" date="2026-08-27">
+    <release version="0.1.0" date="2026-08-28">
       <description>
         <p>First release.</p>
+        <ul>
+          <li>Hold a shortcut anywhere, speak, and release to insert the text</li>
+          <li>Transcription runs on your own machine, with Vulkan acceleration</li>
+          <li>Works entirely offline once a model has been downloaded</li>
+          <li>Choose from several Whisper models, from 32 MB up to 874 MB</li>
+          <li>Recent dictations are capped, and anything older is erased rather than hidden</li>
+        </ul>
       </description>
     </release>
   </releases>
