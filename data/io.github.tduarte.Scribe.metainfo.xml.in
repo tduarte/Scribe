@@ -76,6 +76,17 @@
   <translation type="gettext">scribe</translation>
 
   <releases>
+    <release version="0.1.1" date="2026-08-28">
+      <description>
+        <p>
+          Corrected the description of Scribe on this page. It claimed to
+          understand 99 languages and to write English from any of them;
+          in fact you can choose from 16 languages or let Scribe work out
+          which you are speaking, and writing English from another language
+          is a setting you turn on yourself.
+        </p>
+      </description>
+    </release>
     <release version="0.1.0" date="2026-08-28">
       <description>
         <p>First release.</p>
