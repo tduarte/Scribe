@@ -64,7 +64,7 @@ class HistoryPage(Gtk.Box):
         entries = "dictation" if limit == 1 else "dictations"
         return (
             f"Only the last {limit} {entries} are kept. Anything older is erased "
-            f"from this computer, not just hidden."
+            f"from this computer."
         )
 
     def _render(self) -> None:
