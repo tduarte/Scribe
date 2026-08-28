@@ -104,7 +104,7 @@ jobs:
       #     flatpak_app/files/share/app-info/media
       # itself. Doing it again is redundant.
 
-      # Fails on every finding except the two that only Flathub's own
+      # Fails on every finding except the three that only Flathub's own
       # infrastructure can clear. See the script for why.
       - name: Lint repo
         run: build-aux/lint-repo.sh repo
