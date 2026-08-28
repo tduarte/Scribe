@@ -19,34 +19,6 @@ Transcription runs entirely on your own machine with
 Vulkan. Nothing you say leaves the computer, and once a model is downloaded
 Scribe works completely offline.
 
-## Why this exists
-
-[Handy](https://github.com/cjpais/Handy) is the reference app for this idea, but
-it has no Flatpak, and its own tracker names the reason: Wayland offers no single
-API for global hotkeys or text insertion, so Handy shells out to
-`wtype`/`ydotool`/`xdotool` — none of which a sandboxed app can use, and none of
-which work on GNOME at all.
-
-Scribe takes the portal route instead:
-
-| Need | Mechanism |
-|---|---|
-| Global hotkey | `org.freedesktop.portal.GlobalShortcuts` |
-| Inserting text | `org.freedesktop.portal.RemoteDesktop` + `Clipboard` |
-| Running in the background | `org.freedesktop.portal.Background` |
-
-The result needs **no static input permissions at all** — no `--device=all`, no
-`--filesystem=host`, no helper daemon on the host.
-
-```
-$ flatpak info --show-permissions io.github.tduarte.Scribe
-[Context]
-shared=ipc;network;
-sockets=fallback-x11;pulseaudio;wayland;
-devices=dri;
-filesystems=xdg-run/pipewire-0:ro;
-```
-
 ## Performance
 
 Measured on an AMD Radeon RX 9070 XT (RDNA4, `gfx1201`, RADV) with
