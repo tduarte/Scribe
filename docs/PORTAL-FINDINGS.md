@@ -235,7 +235,13 @@ Measured end to end through `inject.paste()`, with
 |---|---|---|
 | ghostty | rung 1, `XF86Paste` | 263 ms |
 | GNOME Text Editor (GTK4) | rung 1, `XF86Paste` | 260 ms |
+| LibreOffice Writer (VCL, gtk3 plugin) | rung 1, `XF86Paste` | 263 ms |
 | Ptyxis (VTE) | rung 2, `Ctrl+Shift+V` | 465 ms |
+
+LibreOffice was expected to be the one casualty, because it binds Ctrl+Shift+V
+to Paste Special and would open a dialog at rung 2. It never gets there: VCL
+handles `XF86Paste` too, so rung 1 pastes and Paste Special is never reached.
+Reading `XF86Paste` support off toolkit source under-counts it.
 
 Receipts arrive 2-3 ms after the chord that earns them, so the 200 ms settle
 between rungs is slack rather than a typical wait. In Ptyxis, rung 1 produced no
