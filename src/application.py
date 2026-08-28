@@ -121,6 +121,7 @@ class ScribeApplication(Adw.Application):
             self.add_action(action)
 
         self.set_accels_for_action("app.preferences", ["<Control>comma"])
+        self.set_accels_for_action("app.cancel", ["Escape"])
         self.set_accels_for_action("app.quit", ["<Control>q"])
 
     # -- lifecycle -------------------------------------------------------
@@ -228,7 +229,6 @@ class ScribeApplication(Adw.Application):
         self.shortcuts = ShortcutManager(
             on_press=lambda: self.controller.on_shortcut_press(),
             on_release=lambda: self.controller.on_shortcut_release(),
-            on_cancel=lambda: self.controller.cancel(),
             on_error=self._on_shortcut_error,
         )
         self.shortcuts.on_triggers_changed = self._on_triggers_changed

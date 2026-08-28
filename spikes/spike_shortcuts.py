@@ -100,10 +100,6 @@ class Probe:
                     "description": GLib.Variant("s", "Hold to dictate"),
                     "preferred_trigger": GLib.Variant("s", "CTRL+ALT+space"),
                 }),
-                ("cancel", {
-                    "description": GLib.Variant("s", "Cancel dictation"),
-                    "preferred_trigger": GLib.Variant("s", "CTRL+ALT+Escape"),
-                }),
             ]
             self.portal.request_call(
                 IFACE, "BindShortcuts",

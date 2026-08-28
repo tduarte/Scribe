@@ -31,7 +31,6 @@ log = logging.getLogger(__name__)
 IFACE = "org.freedesktop.portal.GlobalShortcuts"
 
 SHORTCUT_DICTATE = "dictate"
-SHORTCUT_CANCEL = "cancel"
 
 # Silence long enough to mean "released", once auto-repeat has demonstrably
 # started. The observed repeat interval is 30-31 ms, so 120 ms is ~4 missed
@@ -134,7 +133,6 @@ class ShortcutManager:
         self,
         on_press: Callable[[], None],
         on_release: Callable[[], None],
-        on_cancel: Callable[[], None],
         on_error: Callable[[PortalError], None],
         *,
         preferred_trigger: str = "CTRL+ALT+space",
@@ -143,7 +141,6 @@ class ShortcutManager:
         self.preferred_trigger = preferred_trigger
         self.session: str | None = None
         self.triggers: dict[str, str] = {}
-        self._on_cancel = on_cancel
         self._on_error = on_error
         self._subs: list[int] = []
         self.detector = HoldDetector(on_press, on_release)
@@ -205,14 +202,14 @@ class ShortcutManager:
         self._bind()
 
     def _bind(self) -> None:
+        # Only one shortcut is registered. Releasing the key already ends
+        # dictation, so a separate cancel binding earns nothing and costs the
+        # user an extra confirmation dialog; cancelling is available as an
+        # in-app action instead.
         shortcuts = [
             (SHORTCUT_DICTATE, {
                 "description": GLib.Variant("s", "Hold to dictate"),
                 "preferred_trigger": GLib.Variant("s", self.preferred_trigger),
-            }),
-            (SHORTCUT_CANCEL, {
-                "description": GLib.Variant("s", "Cancel dictation"),
-                "preferred_trigger": GLib.Variant("s", "CTRL+ALT+Escape"),
             }),
         ]
         self.portal.request_call(
@@ -243,9 +240,6 @@ class ShortcutManager:
     def _activated(self, session, shortcut_id, timestamp, options) -> None:
         if shortcut_id == SHORTCUT_DICTATE:
             self.detector.activated()
-        elif shortcut_id == SHORTCUT_CANCEL:
-            self.detector.cancel()
-            self._on_cancel()
 
     def _deactivated(self, session, shortcut_id, timestamp, options) -> None:
         if shortcut_id == SHORTCUT_DICTATE:
