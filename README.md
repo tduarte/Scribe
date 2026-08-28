@@ -39,6 +39,7 @@ faster, so the GPU only starts paying off from `small` upwards.
 - GNOME 48 or newer (the GlobalShortcuts portal landed in 48; developed against 50)
 - Wayland
 - A GPU with Vulkan for acceleration — otherwise it falls back to the CPU
+- An x86_64 CPU with AVX2, meaning roughly 2013 or newer
 
 ## Building
 

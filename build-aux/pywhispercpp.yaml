@@ -30,6 +30,16 @@ build-commands:
     export CMAKE_GENERATOR=Ninja
     export GGML_VULKAN=1
     export GGML_NATIVE=OFF                    # defaults ON; would bake in -march=native
+    # AVX2/FMA/F16C are baked in deliberately. There is no runtime CPU dispatch
+    # in this build, so these emit vfmadd/ymm unconditionally and the CPU
+    # fallback SIGILLs on x86_64 without AVX2 -- pre-2013 hardware, which we
+    # have chosen not to support. Building without them is correct everywhere
+    # but far slower, and not only on the CPU path: whisper runs part of the
+    # graph on the CPU backend even when Vulkan is active, so on an 11.5 s clip
+    # dropping these cost 0.21 s -> 4.56 s on the GPU and 18.7 s -> 237 s on the
+    # CPU. They gate GPU performance too, which is not obvious.
+    # The clean fix is GGML_CPU_ALL_VARIANTS + GGML_BACKEND_DL, which builds one
+    # backend per instruction-set tier and picks at load time.
     export GGML_AVX=ON
     export GGML_AVX2=ON
     export GGML_F16C=ON

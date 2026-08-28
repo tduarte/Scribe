@@ -13,24 +13,31 @@
 
   <description>
     <p>
-      Scribe turns speech into text anywhere on your desktop. Hold a shortcut,
-      say what you mean, and release — the words appear in whatever you were
-      typing into.
+      Speak, and Scribe writes it down. Hold a keyboard shortcut anywhere on
+      your desktop, say what you want to write, and let go — the words appear
+      in whatever you were already typing into, whether that is an email, a
+      chat window, or your editor.
     </p>
     <p>
-      Transcription runs entirely on your own machine using Whisper, with
-      optional GPU acceleration. Nothing you say is sent anywhere, and once a
-      model is downloaded Scribe works completely offline.
+      It is quicker than typing for anything longer than a sentence, and it
+      keeps up with natural speech rather than making you dictate word by
+      word. If your hands are busy, sore, or simply slower than your thoughts,
+      you can talk instead.
     </p>
-    <p>Features:</p>
+    <p>
+      Everything happens on your own computer. Your voice is never uploaded
+      and never stored on anyone else's server, so Scribe keeps working with
+      no internet connection at all.
+    </p>
+    <p>Scribe can:</p>
     <ul>
-      <li>Push-to-talk or toggle dictation from a global keyboard shortcut</li>
-      <li>Runs locally — your voice never leaves the machine</li>
-      <li>GPU accelerated with Vulkan, falling back to CPU</li>
-      <li>Voice activity detection trims silence and avoids hallucinated text</li>
-      <li>Speaks 99 languages, and can translate to English as it transcribes</li>
-      <li>A searchable history of everything you have dictated</li>
-      <li>Custom vocabulary for names and jargon, plus filler-word removal</li>
+      <li>Write into any application, not only ones built for dictation</li>
+      <li>Work out which language you are speaking, and write it down as you said it</li>
+      <li>Turn what you say into English instead, if you ask it to</li>
+      <li>Ignore your pauses, and tidy away the ums and uhs</li>
+      <li>Learn names and jargon it would otherwise get wrong</li>
+      <li>Keep a searchable record of what you have dictated, or none at all</li>
+      <li>Use your graphics card, so longer passages come back in a moment</li>
     </ul>
   </description>
 
