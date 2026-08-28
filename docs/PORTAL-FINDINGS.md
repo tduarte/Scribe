@@ -237,6 +237,12 @@ Measured end to end through `inject.paste()`, with
 | GNOME Text Editor (GTK4) | rung 1, `XF86Paste` | 260 ms |
 | LibreOffice Writer (VCL, gtk3 plugin) | rung 1, `XF86Paste` | 263 ms |
 | Ptyxis (VTE) | rung 2, `Ctrl+Shift+V` | 465 ms |
+| Inkscape text tool (GTK3) | rung 3, `Ctrl+V` | 665 ms |
+
+Every rung earns its place: GTK3 is reached only at rung 3, so Ctrl+V is still
+the chord that carries a large part of the desktop, and 665 ms is the ladder's
+worst case. Ctrl+V is also the right chord there, so the two rungs it waits
+behind cost latency and nothing else.
 
 LibreOffice was expected to be the one casualty, because it binds Ctrl+Shift+V
 to Paste Special and would open a dialog at rung 2. It never gets there: VCL
