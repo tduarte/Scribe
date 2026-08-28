@@ -76,6 +76,16 @@
   <translation type="gettext">scribe</translation>
 
   <releases>
+    <release version="0.1.2" date="2026-08-28">
+      <description>
+        <p>
+          Dictation now works in terminals. Applications do not agree on which
+          keys mean paste, and Scribe was only ever pressing one of them, so
+          text dictated into a terminal arrived as stray characters. Scribe now
+          tries each of them in turn and stops as soon as the text lands.
+        </p>
+      </description>
+    </release>
     <release version="0.1.1" date="2026-08-28">
       <description>
         <p>

@@ -16,6 +16,10 @@ Modes:
   idle    Own the selection, send no chord, wait. Needs nobody at the keyboard.
           ANY transfer here means the signal is eager -> the design fails.
 
+  ladder  Own the selection and run the real escalating paste from
+          inject.paste(), reporting which rung each chord was and which one
+          landed. Focus a window during the countdown first.
+
   chord CHORD
           Own the selection, send CHORD, and report whether a transfer arrives
           and how long it took. Focus a window during the countdown first.
@@ -76,6 +80,7 @@ class Probe:
         self.t0 = 0.0
         self.baseline = 0
         self.sent_at = 0.0
+        self.rungs: list[str] = []
         self.saved: bytes | None = None
 
         self.inj = TextInjector(
@@ -137,10 +142,47 @@ class Probe:
             GLib.timeout_add(1000, lambda: self._countdown(left - 1))
             return
         print()
+        if self.mode == "ladder":
+            self._run_ladder()
+            return
         print(f"  Owning the selection, then sending {self.chord!r}.")
         self.t0 = time.monotonic()
         self.inj._own_selection(TEXT.encode())
         GLib.timeout_add(120, self._send)
+
+    def _run_ladder(self) -> None:
+        print("  Running the real ladder from inject.paste().")
+        print("  Each rung below was actually sent; the last one is the one")
+        print("  that landed, unless the verdict says nothing read the clipboard.")
+        self.t0 = time.monotonic()
+
+        # Trace the rungs without changing them: wrap the real send_chord so the
+        # escalation is the production one, not a copy of it that could drift.
+        real = self.inj.send_chord
+
+        def traced(chord: str) -> None:
+            dt = (time.monotonic() - self.t0) * 1000
+            print(f"    rung {len(self.rungs) + 1}: {chord:<13} +{dt:7.1f} ms")
+            self.rungs.append(chord)
+            real(chord)
+
+        self.inj.send_chord = traced
+        # paste() saves and restores the clipboard itself, so the copy this
+        # spike took is left alone and _restore is not called again.
+        self.saved = None
+        self.inj.paste(TEXT, escalate=True, on_done=self._ladder_done)
+
+    def _ladder_done(self, ok: bool, why: str) -> None:
+        dt = (time.monotonic() - self.t0) * 1000
+        print()
+        print(f"  ladder finished     +{dt:7.1f} ms")
+        print(f"  rungs sent: {len(self.rungs)} -- {', '.join(self.rungs)}")
+        if ok:
+            print(f"  VERDICT: PASTED on rung {len(self.rungs)} ({self.rungs[-1]})")
+            print("           Check the window: exactly one copy of the text.")
+        else:
+            print(f"  VERDICT: nothing read the clipboard -- {why}")
+        GLib.timeout_add(1200, self._quit)
 
     def _send(self) -> bool:
         # The compositor pulls the payload once, eagerly, ~2 ms after
@@ -224,7 +266,7 @@ def main() -> int:
     mode = (sys.argv[1] if len(sys.argv) > 1 else "idle").lower()
     chord = sys.argv[2] if len(sys.argv) > 2 else "paste-key"
     gap_ms = int(sys.argv[3]) if len(sys.argv) > 3 else 0
-    if mode not in ("idle", "chord"):
+    if mode not in ("idle", "chord", "ladder"):
         print(__doc__)
         return 2
 

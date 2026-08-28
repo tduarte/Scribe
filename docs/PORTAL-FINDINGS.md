@@ -228,6 +228,20 @@ not the right one, since every rung that misses still lands on the target:
 `XF86Paste` and Ctrl+Shift+V are simply unbound where unsupported, whereas
 Ctrl+V leaves visible junk, so Ctrl+V goes last.
 
+Measured end to end through `inject.paste()`, with
+`spikes/spike_paste_ladder.py ladder` tracing the rungs as they fire:
+
+| Target | Lands on | Total |
+|---|---|---|
+| ghostty | rung 1, `XF86Paste` | 263 ms |
+| GNOME Text Editor (GTK4) | rung 1, `XF86Paste` | 260 ms |
+| Ptyxis (VTE) | rung 2, `Ctrl+Shift+V` | 465 ms |
+
+Receipts arrive 2-3 ms after the chord that earns them, so the 200 ms settle
+between rungs is slack rather than a typical wait. In Ptyxis, rung 1 produced no
+receipt and left **nothing at all** on the prompt, which is what makes it safe to
+try first: when `XF86Paste` is wrong it is not merely harmless, it is invisible.
+
 > A trap worth knowing when probing this by hand: `send_chord` falls back to
 > Ctrl+V for a chord name it does not know. A probe that "sent `XF86Paste`" from
 > a build without that entry really sent Ctrl+V, armed readline's quoted-insert,
