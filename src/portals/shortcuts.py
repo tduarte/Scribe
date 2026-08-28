@@ -187,6 +187,28 @@ class ShortcutManager:
             self._on_error(error)
             return
         self.session = results["session_handle"]
+        # GNOME shows its shortcut editor on every BindShortcuts call, so binding
+        # unconditionally at startup pops a dialog each time the app launches.
+        # Bindings persist per app ID, so ask what is already registered first
+        # and only bind when there is genuinely nothing there.
+        self.portal.request_call(
+            IFACE, "ListShortcuts",
+            lambda token: GLib.Variant(
+                "(oa{sv})",
+                (self.session, {"handle_token": GLib.Variant("s", token)}),
+            ),
+            self._listed,
+        )
+
+    def _listed(self, results, error) -> None:
+        existing = (results or {}).get("shortcuts", []) if not error else []
+        if existing:
+            log.info("reusing shortcuts already registered for this app")
+            self._record_triggers(existing)
+            return
+        self._bind()
+
+    def _bind(self) -> None:
         shortcuts = [
             (SHORTCUT_DICTATE, {
                 "description": GLib.Variant("s", "Hold to dictate"),
