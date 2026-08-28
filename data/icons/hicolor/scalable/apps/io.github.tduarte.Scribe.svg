@@ -1,30 +1,47 @@
-<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
   <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#62a0ea"/>
-      <stop offset="1" stop-color="#1a5fb4"/>
+    <linearGradient id="bcamberShell" x1=".15" y1="0" x2=".85" y2="1">
+      <stop offset="0" stop-color="#ffd39b"/>
+      <stop offset=".42" stop-color="#ffa348"/>
+      <stop offset="1" stop-color="#e66100"/>
     </linearGradient>
-    <linearGradient id="mic" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#ffffff"/>
-      <stop offset="1" stop-color="#deddda"/>
+    <linearGradient id="bcamberBase" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#5e5c64"/>
+      <stop offset=".55" stop-color="#8a8890"/>
+      <stop offset="1" stop-color="#5e5c64"/>
     </linearGradient>
+    <clipPath id="bcamberClip"><rect x="50" y="30" width="28" height="44" rx="14"/></clipPath>
   </defs>
 
-  <rect x="8" y="8" width="112" height="112" rx="26" fill="url(#bg)"/>
-  <rect x="8" y="8" width="112" height="112" rx="26" fill="none"
-        stroke="#0d3b7a" stroke-opacity=".35" stroke-width="2"/>
+  <rect x="36" y="100" width="56" height="12" rx="6" fill="#3d3846"/>
+  <rect x="36" y="100" width="56" height="8" rx="4" fill="url(#bcamberBase)"/>
+  <rect x="56" y="80" width="16" height="24" fill="#5e5c64"/>
 
-  <!-- sound waves -->
-  <g fill="none" stroke="#ffffff" stroke-opacity=".45" stroke-width="5" stroke-linecap="round">
-    <path d="M32 52a34 34 0 0 0 0 24"/>
-    <path d="M96 52a34 34 0 0 1 0 24"/>
+  <rect x="36" y="20" width="56" height="72" rx="26" fill="#c64600"/>
+  <rect x="36" y="16" width="56" height="72" rx="26" fill="url(#bcamberShell)"/>
+
+  <rect x="48" y="28" width="32" height="48" rx="16" fill="#3d3846"/>
+  <g clip-path="url(#bcamberClip)" fill="#8a8890">
+    <circle cx="52" cy="33" r="2.9"/>
+    <circle cx="60" cy="33" r="2.9"/>
+    <circle cx="68" cy="33" r="2.9"/>
+    <circle cx="76" cy="33" r="2.9"/>
+    <circle cx="56" cy="40" r="2.9"/>
+    <circle cx="64" cy="40" r="2.9"/>
+    <circle cx="72" cy="40" r="2.9"/>
+    <circle cx="52" cy="47" r="2.9"/>
+    <circle cx="60" cy="47" r="2.9"/>
+    <circle cx="68" cy="47" r="2.9"/>
+    <circle cx="76" cy="47" r="2.9"/>
+    <circle cx="56" cy="54" r="2.9"/>
+    <circle cx="64" cy="54" r="2.9"/>
+    <circle cx="72" cy="54" r="2.9"/>
+    <circle cx="52" cy="61" r="2.9"/>
+    <circle cx="60" cy="61" r="2.9"/>
+    <circle cx="68" cy="61" r="2.9"/>
+    <circle cx="76" cy="61" r="2.9"/>
+    <circle cx="56" cy="68" r="2.9"/>
+    <circle cx="64" cy="68" r="2.9"/>
+    <circle cx="72" cy="68" r="2.9"/>
   </g>
-
-  <!-- microphone -->
-  <rect x="52" y="26" width="24" height="46" rx="12" fill="url(#mic)"/>
-  <path d="M41 60a23 23 0 0 0 46 0" fill="none" stroke="#ffffff"
-        stroke-width="7" stroke-linecap="round"/>
-  <rect x="60" y="82" width="8" height="16" rx="4" fill="#ffffff"/>
-  <rect x="47" y="97" width="34" height="8" rx="4" fill="#ffffff"/>
 </svg>

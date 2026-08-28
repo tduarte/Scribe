@@ -14,3 +14,6 @@ spikes/*.json
 data/io.github.tduarte.Scribe.desktop
 data/io.github.tduarte.Scribe.metainfo.xml
 data/io.github.tduarte.Scribe.service
+
+# Icon design exploration, not part of the build
+design/
