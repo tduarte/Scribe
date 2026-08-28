@@ -158,9 +158,18 @@
     <key name="autostart"          type="b"><default>false</default></key>
     <key name="start-hidden"       type="b"><default>false</default></key>
     <key name="history-enabled"    type="b"><default>true</default></key>
+    <key name="history-limit" type="i">
+      <default>5</default>
+      <range min="0" max="1000"/>
+      <summary>How many recent transcripts to keep</summary>
+      <description>
+        Anything beyond this is erased from the database, not merely hidden.
+        Zero keeps nothing at all.
+      </description>
+    </key>
     <key name="history-retention-days" type="i">
       <default>0</default>
-      <summary>Delete history older than this many days; 0 keeps everything</summary>
+      <summary>Also delete history older than this many days; 0 disables this</summary>
     </key>
     <key name="onboarding-completed" type="b"><default>false</default></key>
 

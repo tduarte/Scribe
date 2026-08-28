@@ -19,6 +19,8 @@ install_data(
     'history.py',
     'models.py',
     'postprocess.py',
+    'relative_time.py',
+    'shortcut_label.py',
     'sounds.py',
     'transcriber.py',
     'worker.py',

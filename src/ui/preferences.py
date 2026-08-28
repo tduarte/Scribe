@@ -19,11 +19,6 @@ UNLOAD_CHOICES = [
     (300, "After 5 minutes"), (900, "After 15 minutes"), (3600, "After 1 hour"),
 ]
 
-RETENTION_CHOICES = [
-    (0, "Keep everything"), (3, "3 days"), (14, "2 weeks"),
-    (90, "3 months"), (365, "1 year"),
-]
-
 
 def _combo(title, subtitle, choices, current, on_change):
     """A ComboRow over (value, label) pairs, returning values not indices."""
@@ -132,17 +127,62 @@ class PreferencesDialog(Adw.PreferencesDialog):
         s.bind("start-hidden", hidden, "active", Gio.SettingsBindFlags.DEFAULT)
         system.add(hidden)
 
-        keep_history = Adw.SwitchRow(title="Keep a history of transcripts")
-        s.bind("history-enabled", keep_history, "active", Gio.SettingsBindFlags.DEFAULT)
-        system.add(keep_history)
-
-        system.add(_combo(
-            "Delete transcripts", "Older entries are removed at startup",
-            RETENTION_CHOICES, s.get_int("history-retention-days"),
-            lambda v: s.set_int("history-retention-days", v),
-        ))
         page.add(system)
+
+        privacy = Adw.PreferencesGroup(
+            title="History",
+            description="Your speech is transcribed on this computer and is "
+                        "never uploaded. Recordings are discarded as soon as "
+                        "they have been transcribed.",
+        )
+        keep_history = Adw.SwitchRow(
+            title="Keep recent transcripts",
+            subtitle="Turning this off erases what is already stored",
+        )
+        s.bind("history-enabled", keep_history, "active", Gio.SettingsBindFlags.DEFAULT)
+        privacy.add(keep_history)
+
+        limit = Adw.SpinRow.new_with_range(0, 100, 1)
+        limit.set_title("How many to keep")
+        limit.set_subtitle("Older transcripts are erased from the database, "
+                           "not just hidden")
+        s.bind("history-limit", limit, "value", Gio.SettingsBindFlags.DEFAULT)
+        s.bind("history-enabled", limit, "sensitive", Gio.SettingsBindFlags.GET)
+        privacy.add(limit)
+
+        clear = Adw.ActionRow(
+            title="Clear history now",
+            subtitle="Erase every stored transcript from this computer",
+        )
+        clear_button = Gtk.Button(label="Clear", valign=Gtk.Align.CENTER)
+        clear_button.add_css_class("destructive-action")
+        clear_button.connect("clicked", lambda *_: self._confirm_clear())
+        clear.add_suffix(clear_button)
+        privacy.add(clear)
+        page.add(privacy)
         return page
+
+    def _confirm_clear(self) -> None:
+        dialog = Adw.AlertDialog(
+            heading="Clear history?",
+            body="Every stored transcript will be erased from this computer. "
+                 "This cannot be undone.",
+        )
+        dialog.add_response("cancel", "Cancel")
+        dialog.add_response("clear", "Clear")
+        dialog.set_response_appearance("clear", Adw.ResponseAppearance.DESTRUCTIVE)
+        dialog.set_default_response("cancel")
+        dialog.set_close_response("cancel")
+
+        def respond(_d, response: str) -> None:
+            if response != "clear":
+                return
+            self.app.history.clear()
+            if self.app.window:
+                self.app.window.history_page.reload()
+
+        dialog.connect("response", respond)
+        dialog.present(self)
 
     def _trigger_text(self) -> str:
         if self.app.shortcut_error:

@@ -76,6 +76,7 @@ class Transcriber:
             self._send({"cmd": "quit"})
         except Exception:
             pass
+        self._discard_audio()
         proc, self._proc = self._proc, None
         self._stdin = None
         self._stdout = None
@@ -148,6 +149,7 @@ class Transcriber:
                 self._on_segment(msg.get("text", ""))
         elif event == "result":
             self._busy = False
+            self._discard_audio()
             if self._on_result:
                 self._on_result(
                     msg.get("text", ""),
@@ -159,7 +161,21 @@ class Transcriber:
             self._notify_state("unloaded")
         elif event == "error":
             self._busy = False
+            self._discard_audio()
             self._fail(msg.get("message", "unknown transcription error"))
+
+    def _discard_audio(self) -> None:
+        """Delete the staged recording as soon as it has been consumed.
+
+        It lives in the runtime directory, so it would otherwise sit there for
+        the rest of the session holding the last thing the user said.
+        """
+        try:
+            os.unlink(self._audio_path)
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            log.debug("could not remove staged audio: %s", exc)
 
     def _notify_state(self, state: str) -> None:
         if self._on_state:

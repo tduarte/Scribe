@@ -1,8 +1,17 @@
-"""A searchable record of everything dictated.
+"""A short, deliberately forgetful record of what was dictated.
 
-sqlite3 is in the Python standard library shipped by the GNOME runtime, so this
-costs no dependency. Writes happen on the main loop; the rows are tiny and the
-inserts are one-per-utterance, so this never blocks perceptibly.
+Only the most recent few transcripts are kept, and anything past that limit is
+genuinely destroyed rather than merely hidden. That takes more than a DELETE:
+
+* `secure_delete` makes SQLite overwrite removed content with zeros instead of
+  leaving it legible in free pages.
+* WAL keeps old page images in a side file, so the log is checkpointed and
+  truncated after a purge.
+* VACUUM rewrites the database so freed pages cannot be recovered.
+
+sqlite3 ships with the GNOME runtime's Python, so this costs no dependency.
+Writes happen on the main loop; the rows are tiny and there is one insert per
+utterance, so it never blocks perceptibly.
 """
 
 from __future__ import annotations
@@ -42,6 +51,8 @@ class History:
         self.path = path
         self.db = sqlite3.connect(path)
         self.db.row_factory = sqlite3.Row
+        # Must be set before any deletion for it to have any effect.
+        self.db.execute("PRAGMA secure_delete = ON")
         self._migrate()
 
     def _migrate(self) -> None:
@@ -107,6 +118,46 @@ class History:
     def clear(self) -> None:
         self.db.execute("DELETE FROM transcripts")
         self.db.commit()
+        self._scrub()
+
+    def enforce_limit(self, limit: int) -> int:
+        """Keep only the newest `limit` entries, destroying the rest.
+
+        `limit` of 0 or less means "keep nothing", which is what disabling
+        history does -- it purges what is already stored rather than just
+        stopping new writes.
+        """
+        if limit <= 0:
+            removed = self.count()
+            if removed:
+                self.db.execute("DELETE FROM transcripts")
+                self.db.commit()
+                self._scrub()
+            return removed
+
+        cur = self.db.execute(
+            "DELETE FROM transcripts WHERE id NOT IN ("
+            "  SELECT id FROM transcripts ORDER BY created_at DESC, id DESC LIMIT ?"
+            ")",
+            (limit,),
+        )
+        removed = cur.rowcount
+        self.db.commit()
+        if removed > 0:
+            self._scrub()
+        return removed
+
+    def _scrub(self) -> None:
+        """Make deleted rows unrecoverable from the file on disk."""
+        try:
+            # Fold the write-ahead log back in and truncate it, so old page
+            # images do not survive in the -wal sidecar.
+            self.db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            # VACUUM rewrites the file, releasing the freed pages entirely.
+            # It cannot run inside a transaction, hence the commit above.
+            self.db.execute("VACUUM")
+        except sqlite3.Error as exc:
+            log.warning("could not scrub deleted history: %s", exc)
 
     def prune(self, retention_days: int) -> int:
         """Drop entries older than the retention window. 0 keeps everything."""
@@ -114,8 +165,11 @@ class History:
             return 0
         cutoff = time.time() - retention_days * 86400
         cur = self.db.execute("DELETE FROM transcripts WHERE created_at < ?", (cutoff,))
+        removed = cur.rowcount
         self.db.commit()
-        return cur.rowcount
+        if removed > 0:
+            self._scrub()
+        return removed
 
     def count(self) -> int:
         return int(self.db.execute("SELECT COUNT(*) FROM transcripts").fetchone()[0])

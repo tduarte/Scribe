@@ -235,6 +235,9 @@ class DictationController:
                 model=model.id if model else "",
                 language=language,
             )
+            # Enforce on every write, so the database never holds more than the
+            # user asked for even momentarily.
+            self.history.enforce_limit(self.settings.get_int("history-limit"))
 
         self._set_state(State.DELIVERING)
         self._deliver(cleaned)

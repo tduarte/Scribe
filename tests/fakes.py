@@ -30,6 +30,7 @@ class FakeSettings:
         "custom-filler-words": [],
         "capitalize-first": True,
         "history-enabled": True,
+        "history-limit": 5,
     }
 
     def __init__(self, **overrides):
@@ -138,10 +139,21 @@ class FakeModels:
 class FakeHistory:
     def __init__(self):
         self.entries = []
+        self.limits_applied = []
 
     def add(self, text, *, duration_ms=0, model="", language=""):
         self.entries.append((text, duration_ms, model, language))
         return len(self.entries)
+
+    def enforce_limit(self, limit):
+        self.limits_applied.append(limit)
+        if limit <= 0:
+            removed, self.entries = len(self.entries), []
+            return removed
+        removed = max(0, len(self.entries) - limit)
+        if removed:
+            self.entries = self.entries[-limit:]
+        return removed
 
 
 class FakePlayer:

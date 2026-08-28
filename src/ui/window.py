@@ -2,25 +2,29 @@
 
 from __future__ import annotations
 
-from gi.repository import Adw, Gdk, Gio, GLib, Gtk
+from gi.repository import Adw, Gio, GLib, Gtk
 
 from dictation import State
+from shortcut_label import keycaps
 from ui.history_page import HistoryPage
 from ui.models_page import ModelsPage
 
 STATE_TITLE = {
     State.IDLE: "Ready",
-    State.RECORDING: "Listening…",
-    State.TRANSCRIBING: "Transcribing…",
-    State.DELIVERING: "Inserting…",
+    State.RECORDING: "Listening",
+    State.TRANSCRIBING: "Transcribing",
+    State.DELIVERING: "Inserting",
 }
 
 STATE_ICON = {
-    State.IDLE: "microphone-sensitivity-muted-symbolic",
+    State.IDLE: "audio-input-microphone-symbolic",
     State.RECORDING: "microphone-sensitivity-high-symbolic",
     State.TRANSCRIBING: "content-loading-symbolic",
     State.DELIVERING: "edit-paste-symbolic",
 }
+
+# States where the window is mid-flight and the button should not invite a click.
+BUSY = (State.TRANSCRIBING, State.DELIVERING)
 
 
 class ScribeWindow(Adw.ApplicationWindow):
@@ -62,10 +66,14 @@ class ScribeWindow(Adw.ApplicationWindow):
         ))
 
         menu = Gio.Menu()
-        menu.append("Keyboard Shortcut…", "app.configure-shortcuts")
-        menu.append("Preferences", "app.preferences")
-        menu.append("About Scribe", "app.about")
-        menu.append("Quit", "app.quit")
+        section = Gio.Menu()
+        section.append("Change Shortcut…", "app.configure-shortcuts")
+        section.append("Preferences", "app.preferences")
+        menu.append_section(None, section)
+        about = Gio.Menu()
+        about.append("About Scribe", "app.about")
+        about.append("Quit", "app.quit")
+        menu.append_section(None, about)
         header.pack_end(Gtk.MenuButton(
             icon_name="open-menu-symbolic", menu_model=menu, tooltip_text="Main Menu"
         ))
@@ -110,55 +118,88 @@ class ScribeWindow(Adw.ApplicationWindow):
 
 
 class DictationPage(Gtk.Box):
-    """The at-a-glance view: what the shortcut is, and what was last said."""
+    """The home view: what to press, what is happening, what was just said."""
 
     def __init__(self, application) -> None:
         super().__init__(orientation=Gtk.Orientation.VERTICAL)
         self.app = application
+        self.settings = application.settings
 
         self.status = Adw.StatusPage(
-            icon_name=STATE_ICON[State.IDLE],
-            title="Ready",
-            description="Hold your shortcut anywhere and speak.",
-            vexpand=True,
+            icon_name=STATE_ICON[State.IDLE], title="Ready", vexpand=True
         )
 
         content = Gtk.Box(
-            orientation=Gtk.Orientation.VERTICAL, spacing=18,
-            halign=Gtk.Align.CENTER, width_request=380,
+            orientation=Gtk.Orientation.VERTICAL, spacing=20,
+            halign=Gtk.Align.CENTER, width_request=420,
         )
 
+        # The shortcut is the primary interface, so it leads.
+        self.shortcut_box = Gtk.Box(
+            orientation=Gtk.Orientation.HORIZONTAL, spacing=6,
+            halign=Gtk.Align.CENTER,
+        )
+        content.append(self.shortcut_box)
+
+        # Stands in for the recording overlay GNOME cannot host.
         self.level = Gtk.LevelBar(
             min_value=0.0, max_value=1.0, value=0.0,
-            mode=Gtk.LevelBarMode.CONTINUOUS, height_request=8,
+            mode=Gtk.LevelBarMode.CONTINUOUS,
         )
-        self.level.set_visible(False)
-        content.append(self.level)
+        self.level.add_css_class("level-meter")
+        self.level_revealer = Gtk.Revealer(
+            child=self.level, transition_type=Gtk.RevealerTransitionType.CROSSFADE
+        )
+        content.append(self.level_revealer)
 
         self.record_button = Gtk.Button(
-            label="Start Dictating", halign=Gtk.Align.CENTER,
+            label="Start Dictating", halign=Gtk.Align.CENTER
         )
         self.record_button.add_css_class("suggested-action")
         self.record_button.add_css_class("pill")
         self.record_button.connect("clicked", self._on_record_clicked)
         content.append(self.record_button)
 
-        self.transcript = Gtk.Label(
-            label="", wrap=True, selectable=True, justify=Gtk.Justification.CENTER,
-            xalign=0.5,
-        )
-        self.transcript.add_css_class("dim-label")
-        content.append(self.transcript)
+        content.append(self._build_transcript_card())
 
-        self.copy_button = Gtk.Button(
-            label="Copy Last Transcript", halign=Gtk.Align.CENTER, visible=False,
-        )
-        self.copy_button.add_css_class("flat")
-        self.copy_button.connect("clicked", self._on_copy_clicked)
-        content.append(self.copy_button)
+        self.footer = Gtk.Label(label="", wrap=True, justify=Gtk.Justification.CENTER)
+        self.footer.add_css_class("caption")
+        self.footer.add_css_class("dim-label")
+        content.append(self.footer)
 
         self.status.set_child(content)
         self.append(self.status)
+
+        self.settings.connect("changed::active-model", lambda *_: self._update_footer())
+        self.settings.connect("changed::accelerator", lambda *_: self._update_footer())
+        self._update_footer()
+
+    def _build_transcript_card(self) -> Gtk.Widget:
+        card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        card.add_css_class("card")
+        card.add_css_class("transcript-card")
+
+        self.transcript = Gtk.Label(
+            label="", wrap=True, selectable=True, xalign=0.0,
+            margin_top=12, margin_start=12, margin_end=12,
+        )
+        self.transcript.add_css_class("transcript-text")
+        card.append(self.transcript)
+
+        actions = Gtk.Box(
+            orientation=Gtk.Orientation.HORIZONTAL, spacing=6,
+            halign=Gtk.Align.END, margin_bottom=6, margin_end=6,
+        )
+        self.copy_button = Gtk.Button(label="Copy")
+        self.copy_button.add_css_class("flat")
+        self.copy_button.connect("clicked", self._on_copy_clicked)
+        actions.append(self.copy_button)
+        card.append(actions)
+
+        self.transcript_revealer = Gtk.Revealer(
+            child=card, transition_type=Gtk.RevealerTransitionType.SLIDE_DOWN
+        )
+        return self.transcript_revealer
 
     # -- interaction -----------------------------------------------------
 
@@ -176,45 +217,85 @@ class DictationPage(Gtk.Box):
 
     # -- display ---------------------------------------------------------
 
+    def _set_shortcut_widgets(self, caps: list[str]) -> None:
+        child = self.shortcut_box.get_first_child()
+        while child is not None:
+            nxt = child.get_next_sibling()
+            self.shortcut_box.remove(child)
+            child = nxt
+
+        if not caps:
+            return
+
+        lead = Gtk.Label(label="Hold")
+        lead.add_css_class("dim-label")
+        self.shortcut_box.append(lead)
+        for i, cap in enumerate(caps):
+            if i:
+                plus = Gtk.Label(label="+")
+                plus.add_css_class("dim-label")
+                self.shortcut_box.append(plus)
+            key = Gtk.Label(label=cap)
+            key.add_css_class("keycap")
+            self.shortcut_box.append(key)
+        tail = Gtk.Label(label="and speak")
+        tail.add_css_class("dim-label")
+        self.shortcut_box.append(tail)
+
     def refresh_shortcut_state(self) -> None:
         app = self.app
         if app.shortcut_error:
+            self._set_shortcut_widgets([])
             self.status.set_description(
                 "The dictation shortcut could not be registered. "
                 "You can still dictate from this window."
             )
             return
+
         trigger = ""
         if app.shortcuts and app.shortcuts.triggers:
             trigger = app.shortcuts.triggers.get("dictate", "")
-        if trigger:
-            self.status.set_description(f"{trigger} anywhere, then speak.")
-        else:
-            self.status.set_description("Hold your shortcut anywhere and speak.")
+        caps = keycaps(trigger)
+        self._set_shortcut_widgets(caps)
+        self.status.set_description(
+            None if caps else "Set a shortcut to dictate from anywhere."
+        )
+
+    def _update_footer(self) -> None:
+        model = self.app.models.get(self.settings.get_string("active-model"))
+        if model is None:
+            self.footer.set_label("No model installed yet")
+            return
+        accel = self.settings.get_string("accelerator")
+        where = {"gpu": "graphics card", "cpu": "processor"}.get(
+            accel, "graphics card when available"
+        )
+        self.footer.set_label(f"{model.name} · running on your {where}")
 
     def on_state(self, state: State, detail: str) -> None:
         self.status.set_title(STATE_TITLE.get(state, "Ready"))
         self.status.set_icon_name(STATE_ICON.get(state, STATE_ICON[State.IDLE]))
+
         recording = state is State.RECORDING
-        self.level.set_visible(recording)
+        self.level_revealer.set_reveal_child(recording)
         if not recording:
             self.level.set_value(0.0)
 
-        self.record_button.set_label(
-            "Stop Dictating" if recording else "Start Dictating"
-        )
-        self.record_button.set_sensitive(state in (State.IDLE, State.RECORDING))
+        self.record_button.set_label("Stop" if recording else "Start Dictating")
+        self.record_button.set_sensitive(state not in BUSY)
+        self.shortcut_box.set_sensitive(state is State.IDLE)
 
         if state is State.IDLE:
             self.refresh_shortcut_state()
             text = self.app.controller.last_text
             if text:
                 self.transcript.set_label(text)
-                self.copy_button.set_visible(True)
+                self.transcript_revealer.set_reveal_child(True)
 
     def set_partial(self, text: str) -> None:
         self.transcript.set_label(text)
+        self.transcript_revealer.set_reveal_child(bool(text))
 
     def set_level(self, level: float) -> None:
-        if self.level.get_visible():
+        if self.level_revealer.get_reveal_child():
             self.level.set_value(level)

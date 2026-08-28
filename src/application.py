@@ -18,7 +18,7 @@ import gi
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 
-from gi.repository import Adw, Gio, GLib, Gtk  # noqa: E402
+from gi.repository import Adw, Gdk, Gio, GLib, Gtk  # noqa: E402
 
 import audio  # noqa: E402
 import sounds  # noqa: E402
@@ -129,10 +129,17 @@ class ScribeApplication(Adw.Application):
     def do_startup(self) -> None:
         Adw.Application.do_startup(self)
         audio.init()
+        self._load_styles()
 
         self.models = ModelStore(os.path.join(self.pkgdatadir, "models.json"))
         self.history = History()
-        self.history.prune(self.settings.get_int("history-retention-days"))
+        self._enforce_history_policy()
+        self.settings.connect("changed::history-limit",
+                              lambda *_: self._enforce_history_policy())
+        self.settings.connect("changed::history-enabled",
+                              lambda *_: self._enforce_history_policy())
+        self.settings.connect("changed::history-retention-days",
+                              lambda *_: self._enforce_history_policy())
 
         self.player = sounds.SoundPlayer(os.path.join(self.pkgdatadir, "sounds"))
         self.player.enabled = self.settings.get_boolean("sound-feedback")
@@ -181,6 +188,39 @@ class ScribeApplication(Adw.Application):
 
         GLib.timeout_add(SHORTCUT_START_DELAY_MS, self._start_shortcuts)
         self._request_background()
+
+    def _load_styles(self) -> None:
+        css_path = os.path.join(self.pkgdatadir, "style.css")
+        if not os.path.exists(css_path):
+            return
+        provider = Gtk.CssProvider()
+        # load_from_path is deprecated since GTK 4.12.
+        with open(css_path, encoding="utf-8") as fh:
+            provider.load_from_string(fh.read())
+        display = Gdk.Display.get_default()
+        if display is not None:
+            Gtk.StyleContext.add_provider_for_display(
+                display, provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
+            )
+
+    def _enforce_history_policy(self) -> None:
+        """Apply the retention rules to what is already stored.
+
+        Run at startup and whenever the settings change, so lowering the limit
+        or switching history off erases the existing entries rather than just
+        hiding them.
+        """
+        if not self.settings.get_boolean("history-enabled"):
+            removed = self.history.enforce_limit(0)
+        else:
+            self.history.prune(self.settings.get_int("history-retention-days"))
+            removed = self.history.enforce_limit(
+                self.settings.get_int("history-limit")
+            )
+        if removed:
+            log.info("erased %d stored transcript(s)", removed)
+        if self.window:
+            self.window.history_page.reload()
 
     def do_activate(self) -> None:
         if self._start_hidden and self.window is None:

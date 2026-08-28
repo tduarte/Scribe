@@ -156,6 +156,19 @@ class TestResults:
         assert p["history"].entries[0][0] == "Hello world"
         assert p["history"].entries[0][3] == "en"
 
+    def test_history_limit_is_enforced_on_every_write(self):
+        # The limit is a privacy guarantee, so the database must never hold
+        # more than the user asked for, even between dictations.
+        ctl, p, _ = build(settings=FakeSettings(**{"history-limit": 3}))
+        for i in range(5):
+            ctl.on_shortcut_press(); ctl.on_shortcut_release()
+            ctl.on_result(f"utterance {i}", "en", 10)
+        assert p["history"].limits_applied == [3, 3, 3, 3, 3]
+        assert len(p["history"].entries) == 3
+        assert [e[0] for e in p["history"].entries] == [
+            "Utterance 2", "Utterance 3", "Utterance 4"
+        ]
+
     def test_history_can_be_disabled(self):
         ctl, p, _ = build(settings=FakeSettings(**{"history-enabled": False}))
         ctl.on_shortcut_press(); ctl.on_shortcut_release()

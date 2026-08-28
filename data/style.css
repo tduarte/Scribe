@@ -1,0 +1,32 @@
+/* Keys are rendered as keycaps rather than as "<Alt>space", which is what the
+   portal actually hands back and reads like a leaked implementation detail. */
+.keycap {
+  background-color: alpha(currentColor, 0.07);
+  border: 1px solid alpha(currentColor, 0.16);
+  border-bottom-width: 2px;
+  border-radius: 6px;
+  padding: 3px 10px;
+  font-weight: bold;
+}
+
+/* The level meter stands in for the missing recording overlay, so it needs to
+   read clearly at a glance rather than as a thin progress bar. */
+.level-meter trough {
+  min-height: 8px;
+  border-radius: 4px;
+}
+.level-meter block {
+  min-height: 8px;
+  border-radius: 4px;
+}
+.level-meter block.filled {
+  background-color: @accent_bg_color;
+}
+
+.transcript-card {
+  padding: 6px;
+}
+
+.transcript-text {
+  font-size: 1.05em;
+}

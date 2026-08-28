@@ -107,10 +107,22 @@ def test_worker_crash_is_reported_and_not_fatal(h):
     assert h.results[0][0] == "hello world"
 
 
-def test_audio_is_staged_in_the_runtime_dir(h):
+def test_staged_audio_is_deleted_once_transcribed(h):
+    """The recording must not outlive the transcription that consumed it."""
     h.t.start()
     pump(lambda: "ready" in h.states)
     h.t.transcribe(AUDIO, model_path="/m.bin")
     pump(lambda: h.results)
-    assert os.path.exists(h.t._audio_path)
-    assert os.path.getsize(h.t._audio_path) == len(AUDIO)
+    assert not os.path.exists(h.t._audio_path), (
+        "the staged recording was left behind after transcription"
+    )
+
+
+def test_staged_audio_is_deleted_even_when_transcription_fails(h):
+    h.t.start()
+    pump(lambda: "ready" in h.states)
+    h.t.transcribe(AUDIO, model_path="/m.bin", fail=True)
+    assert pump(lambda: h.errors)
+    assert not os.path.exists(h.t._audio_path), (
+        "the staged recording survived a failed transcription"
+    )

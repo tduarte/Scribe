@@ -57,8 +57,8 @@ if compile_schemas.found()
        args: ['--strict', '--dry-run', meson.current_source_dir()])
 endif
 
-# Model catalog
-install_data('models.json', install_dir: pkgdatadir)
+# Model catalog and stylesheet
+install_data(['models.json', 'style.css'], install_dir: pkgdatadir)
 
 # Icons
 install_data(

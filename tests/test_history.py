@@ -85,3 +85,74 @@ def test_reopen_persists(hist):
     again = History(path)
     assert again.latest().text == "durable"
     again.close()
+
+
+class TestDestructiveLimit:
+    """The limit is a privacy guarantee, so it must reach the file on disk."""
+
+    def test_keeps_only_the_newest_n(self, hist):
+        for i in range(12):
+            hist.add(f"entry {i}")
+            time.sleep(0.002)
+        removed = hist.enforce_limit(5)
+        assert removed == 7
+        assert hist.count() == 5
+        assert [e.text for e in hist.recent()] == [
+            "entry 11", "entry 10", "entry 9", "entry 8", "entry 7"
+        ]
+
+    def test_under_the_limit_is_a_noop(self, hist):
+        hist.add("only one")
+        assert hist.enforce_limit(5) == 0
+        assert hist.count() == 1
+
+    def test_zero_limit_erases_everything(self, hist):
+        for i in range(4):
+            hist.add(f"secret {i}")
+        assert hist.enforce_limit(0) == 4
+        assert hist.count() == 0
+
+    def test_purged_text_is_not_left_in_the_file(self, hist):
+        # secure_delete + WAL checkpoint + VACUUM should leave no readable
+        # trace of a dropped transcript in the database file.
+        hist.add("KEEPME the newest entry")
+        for i in range(6):
+            hist.add(f"PURGEME sensitive utterance {i}")
+            time.sleep(0.002)
+        hist.add("KEEPME the newest entry")
+        hist.enforce_limit(1)
+        assert hist.count() == 1
+
+        with open(hist.path, "rb") as fh:
+            raw = fh.read()
+        assert b"PURGEME" not in raw, "deleted transcript text survived in the db file"
+
+    def test_wal_sidecar_does_not_retain_purged_text(self, hist):
+        import os
+        hist.add("PURGEME confidential")
+        hist.add("kept")
+        hist.enforce_limit(1)
+        wal = hist.path + "-wal"
+        if os.path.exists(wal):
+            with open(wal, "rb") as fh:
+                assert b"PURGEME" not in fh.read(), "purged text survived in the WAL"
+
+    def test_lowering_the_limit_later_erases_the_excess(self, hist):
+        for i in range(10):
+            hist.add(f"entry {i}")
+            time.sleep(0.002)
+        hist.enforce_limit(8)
+        assert hist.count() == 8
+        hist.enforce_limit(3)
+        assert hist.count() == 3
+
+    def test_survives_reopen(self, hist):
+        for i in range(9):
+            hist.add(f"entry {i}")
+            time.sleep(0.002)
+        hist.enforce_limit(5)
+        path = hist.path
+        hist.close()
+        again = History(path)
+        assert again.count() == 5
+        again.close()
