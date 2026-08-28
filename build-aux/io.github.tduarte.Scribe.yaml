@@ -70,4 +70,4 @@ modules:
     sources:
       - type: git
         url: https://github.com/tduarte/Scribe.git
-        commit: 848474dd90ae33a5af82b55a6b67c0191976172e
+        commit: 1b4fb9274245c1bfc7577e11eb4559bd39d21c15

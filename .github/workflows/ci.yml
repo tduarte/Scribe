@@ -1,0 +1,109 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Fast feedback: the pure-Python units run on a plain runner in seconds,
+  # so a logic error does not wait on a whisper.cpp build to be reported.
+  tests:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - run: pip install pytest
+      - name: Run pytest
+        run: python -m pytest tests -q
+
+  metadata:
+    name: Metadata
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install validators
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y appstream desktop-file-utils
+
+      # The .in files carry no substitutions that affect validity, so they can
+      # be checked without configuring a full Meson build.
+      - name: Validate AppStream metainfo
+        run: appstreamcli validate --explain data/io.github.tduarte.Scribe.metainfo.xml.in
+
+      # desktop-file-validate checks the FILENAME too -- it must be
+      # reverse-DNS -- so the .in has to be copied under the real name rather
+      # than validated in place or through a temp file with any other name.
+      - name: Validate desktop entry
+        run: |
+          mkdir -p /tmp/desktop
+          cp data/io.github.tduarte.Scribe.desktop.in \
+             /tmp/desktop/io.github.tduarte.Scribe.desktop
+          desktop-file-validate /tmp/desktop/io.github.tduarte.Scribe.desktop
+
+      # finish-args and cleanup must stay identical between the development and
+      # the Flathub manifest -- otherwise the permissions that get reviewed are
+      # not the permissions that were tested.
+      - name: Manifests agree on permissions
+        run: |
+          a=$(sed -n '/^finish-args:/,/^modules:/p' build-aux/io.github.tduarte.Scribe.yaml | md5sum)
+          b=$(sed -n '/^finish-args:/,/^modules:/p' build-aux/scribe-dev.yaml            | md5sum)
+          if [ "$a" != "$b" ]; then
+            echo "::error::finish-args/cleanup differ between the two manifests"
+            diff <(sed -n '/^finish-args:/,/^modules:/p' build-aux/io.github.tduarte.Scribe.yaml) \
+                 <(sed -n '/^finish-args:/,/^modules:/p' build-aux/scribe-dev.yaml) || true
+            exit 1
+          fi
+          echo "identical"
+
+  flatpak:
+    name: Flatpak build and lint
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-50
+      options: --privileged
+    steps:
+      - uses: actions/checkout@v4
+
+      # Lints the manifest text before spending twenty minutes compiling it.
+      - name: Lint manifest
+        run: flatpak-builder-lint manifest build-aux/io.github.tduarte.Scribe.yaml
+
+      - name: Build
+        uses: flathub-infra/flatpak-github-actions/flatpak-builder@master
+        with:
+          bundle: scribe.flatpak
+          manifest-path: build-aux/io.github.tduarte.Scribe.yaml
+          cache-key: flatpak-builder-${{ github.sha }}
+          # Screenshot mirroring is what Flathub's own builders do; without it
+          # the repo lint fails on appstream-external-screenshot-url.
+          mirror-screenshots-url: https://dl.flathub.org/media
+          build-bundle: true
+          verbose: true
+
+      # appstream-compose only writes this directory when it managed to mirror
+      # the screenshots. Flathub's builders do that; this workflow generally
+      # cannot, so the commit is conditional rather than a hard failure.
+      - name: Commit the mirrored screenshots into the repo
+        run: |
+          media=flatpak_app/files/share/app-info/media
+          if [ -d "$media" ]; then
+            ostree commit --repo=repo --canonical-permissions \
+              --branch=screenshots/x86_64 "$media"
+          else
+            echo "::notice::no mirrored media; Flathub mirrors screenshots itself"
+          fi
+
+      # Fails on every finding except the two that only Flathub's own
+      # infrastructure can clear. See the script for why.
+      - name: Lint repo
+        run: build-aux/lint-repo.sh repo

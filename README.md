@@ -1,7 +1,18 @@
+<div align="center">
+
+<img src="docs/scribe-icon.png" width="128" alt="">
+
 # Scribe
 
-Dictate anywhere on your GNOME desktop. Hold a keyboard shortcut, speak, and
-Scribe types what you said into whatever application you were using.
+**Dictate anywhere on your GNOME desktop.**
+Hold a keyboard shortcut, speak, and Scribe types what you said
+into whatever application you were using.
+
+[![CI](https://github.com/tduarte/Scribe/actions/workflows/ci.yml/badge.svg)](https://github.com/tduarte/Scribe/actions/workflows/ci.yml)
+
+<img src="data/screenshots/main.png" width="720" alt="Scribe's main window, showing the shortcut to hold and the active model">
+
+</div>
 
 Transcription runs entirely on your own machine with
 [whisper.cpp](https://github.com/ggml-org/whisper.cpp), GPU-accelerated through
