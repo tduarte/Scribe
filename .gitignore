@@ -1,5 +1,6 @@
 .flatpak-builder/
 build/
+build-flathub/
 build-dir/
 repo/
 _build/
