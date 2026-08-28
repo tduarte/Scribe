@@ -61,9 +61,10 @@ class ScribeWindow(Adw.ApplicationWindow):
         )
 
         header = Adw.HeaderBar()
-        header.set_title_widget(Adw.ViewSwitcher(
+        self.switcher = Adw.ViewSwitcher(
             stack=self.stack, policy=Adw.ViewSwitcherPolicy.WIDE
-        ))
+        )
+        header.set_title_widget(self.switcher)
 
         menu = Gio.Menu()
         section = Gio.Menu()
@@ -78,10 +79,23 @@ class ScribeWindow(Adw.ApplicationWindow):
             icon_name="open-menu-symbolic", menu_model=menu, tooltip_text="Main Menu"
         ))
 
+        # One set of tabs at a time, per the HIG: the switcher lives in the
+        # header while the window is wide enough, and moves to a bottom bar only
+        # when it is not. Showing both at once duplicates the same navigation.
+        self.switcher_bar = Adw.ViewSwitcherBar(stack=self.stack, reveal=False)
+
         toolbar = Adw.ToolbarView()
         toolbar.add_top_bar(header)
         toolbar.set_content(self.stack)
-        toolbar.add_bottom_bar(Adw.ViewSwitcherBar(stack=self.stack, reveal=True))
+        toolbar.add_bottom_bar(self.switcher_bar)
+
+        narrow = Adw.Breakpoint.new(
+            Adw.BreakpointCondition.parse("max-width: 560sp")
+        )
+        narrow.add_setter(self.switcher_bar, "reveal", True)
+        narrow.add_setter(header, "title-widget",
+                          Adw.WindowTitle(title="Scribe"))
+        self.add_breakpoint(narrow)
 
         self.toasts.set_child(toolbar)
         self.set_content(self.toasts)
