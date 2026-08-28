@@ -21,6 +21,7 @@ class FakeSettings:
         "vad-speech-pad-ms": 30,
         "output-mode": "paste",
         "paste-chord": "ctrl-v",
+        "paste-escalate": True,
         "restore-clipboard": True,
         "append-trailing-space": False,
         "paste-delay-ms": 60,
@@ -100,9 +101,10 @@ class FakeInjector:
         self.ok, self.error = ok, error
         self.pasted, self.copied = [], []
 
-    def paste(self, text, *, chord="ctrl-v", restore_clipboard=True,
-              delay_ms=60, on_done=None):
+    def paste(self, text, *, chord="ctrl-v", escalate=True,
+              restore_clipboard=True, delay_ms=60, on_done=None):
         self.pasted.append({"text": text, "chord": chord,
+                            "escalate": escalate,
                             "restore": restore_clipboard})
         if on_done:
             on_done(self.ok, self.error)

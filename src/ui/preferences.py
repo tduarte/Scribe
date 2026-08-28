@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from gi.repository import Adw, Gio, Gtk
+from gi.repository import Adw, Gio, GObject, Gtk
 
 import audio
 
@@ -94,13 +94,26 @@ class PreferencesDialog(Adw.PreferencesDialog):
             s.get_string("output-mode"),
             lambda v: s.set_string("output-mode", v),
         ))
-        output.add(_combo(
-            "Paste shortcut", "Terminals usually need Ctrl+Shift+V",
+        escalate = Adw.SwitchRow(
+            title="Find the right paste shortcut",
+            subtitle="Different apps paste with different keys, so Scribe tries "
+                     "them in turn until the text lands",
+        )
+        s.bind("paste-escalate", escalate, "active", Gio.SettingsBindFlags.DEFAULT)
+        output.add(escalate)
+
+        chord = _combo(
+            "Paste shortcut", "Used only when Scribe is not trying them in turn",
             [("ctrl-v", "Ctrl+V"), ("ctrl-shift-v", "Ctrl+Shift+V"),
-             ("shift-insert", "Shift+Insert")],
+             ("shift-insert", "Shift+Insert"), ("paste-key", "Paste key")],
             s.get_string("paste-chord"),
             lambda v: s.set_string("paste-chord", v),
-        ))
+        )
+        escalate.bind_property(
+            "active", chord, "sensitive",
+            GObject.BindingFlags.SYNC_CREATE | GObject.BindingFlags.INVERT_BOOLEAN,
+        )
+        output.add(chord)
 
         restore = Adw.SwitchRow(
             title="Restore clipboard",

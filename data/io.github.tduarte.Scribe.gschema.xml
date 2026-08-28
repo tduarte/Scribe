@@ -19,6 +19,7 @@
     <value nick="ctrl-v"       value="0"/>
     <value nick="ctrl-shift-v" value="1"/>
     <value nick="shift-insert" value="2"/>
+    <value nick="paste-key"    value="3"/>
   </enum>
 
   <enum id="io.github.tduarte.Scribe.Accelerator">
@@ -123,6 +124,12 @@
       <default>'paste'</default>
       <summary>How transcribed text reaches the focused application</summary>
     </key>
+    <key name="paste-escalate" type="b">
+      <default>true</default>
+      <summary>Try each paste shortcut in turn until one lands</summary>
+    </key>
+    <!-- Only consulted when paste-escalate is off. Left at ctrl-v so turning
+         escalation off restores exactly the older behaviour. -->
     <key name="paste-chord" enum="io.github.tduarte.Scribe.PasteChord">
       <default>'ctrl-v'</default>
     </key>

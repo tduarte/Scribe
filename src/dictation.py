@@ -270,6 +270,7 @@ class DictationController:
         self.injector.paste(
             text,
             chord=self.settings.get_string("paste-chord"),
+            escalate=self.settings.get_boolean("paste-escalate"),
             restore_clipboard=self.settings.get_boolean("restore-clipboard"),
             delay_ms=self.settings.get_int("paste-delay-ms"),
             on_done=done,

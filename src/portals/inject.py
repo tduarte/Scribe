@@ -14,6 +14,11 @@ Two things learned the hard way (docs/PORTAL-FINDINGS.md):
   arbitrary Unicode intact, so pasting is what we do.
 * The compositor may ask for the clipboard payload more than once per paste, and
   it asks on the main loop. Nothing in this path may block.
+
+No single chord pastes everywhere -- terminals want Ctrl+Shift+V, GTK text
+widgets do not bind it, and Ctrl+V is quoted-insert in a terminal. So we send
+chords in turn and stop as soon as the Clipboard portal reports that something
+read the selection, which is the receipt `LADDER` below is built around.
 """
 
 from __future__ import annotations
@@ -40,6 +45,7 @@ KEY_CONTROL_L = 0xFFE3
 KEY_SHIFT_L = 0xFFE1
 KEY_V = 0x0076
 KEY_INSERT = 0xFF63
+KEY_XF86_PASTE = 0x1008FF6D
 
 TEXT_MIME = "text/plain;charset=utf-8"
 MIME_TYPES = [TEXT_MIME, "text/plain", "UTF8_STRING"]
@@ -48,7 +54,30 @@ CHORDS: dict[str, tuple[int, ...]] = {
     "ctrl-v": (KEY_CONTROL_L, KEY_V),
     "ctrl-shift-v": (KEY_CONTROL_L, KEY_SHIFT_L, KEY_V),
     "shift-insert": (KEY_SHIFT_L, KEY_INSERT),
+    "paste-key": (KEY_XF86_PASTE,),
 }
+
+# Tried in order until something reads the clipboard. Ordered by how each chord
+# fails when it is not the right one, because every rung that misses still lands
+# on the focused application:
+#
+#   paste-key     unbound almost everywhere -> silent no-op. GTK4 and ghostty.
+#   ctrl-shift-v  unbound in GTK text widgets -> silent no-op. VTE terminals.
+#   ctrl-v        quoted-insert in terminals -> leaves visible ^V junk.
+#
+# Ctrl+V is last because it is the only rung whose failure the user can see.
+LADDER = ("paste-key", "ctrl-shift-v", "ctrl-v")
+
+# How long to give an application to read the clipboard before trying the next
+# rung. Measured receipts arrive within a couple of milliseconds of the chord;
+# this is slack for a busy target, not a typical wait.
+SETTLE_MS = 200
+
+# mutter pulls the payload once, on its own, a millisecond or two after
+# SetSelection and with nothing pasting (measured; docs/PORTAL-FINDINGS.md).
+# That one transfer is normal and is already counted before the first chord
+# goes out. More than one means something else is reading every selection.
+EAGER_PULLS = 1
 
 
 class InjectorState(Enum):
@@ -76,6 +105,10 @@ class TextInjector:
         self.state = InjectorState.IDLE
         self.session: str | None = None
         self.clipboard_enabled = False
+
+        # Bumped on every SelectionTransfer. A transfer means something read the
+        # clipboard, which is the only paste receipt available to us.
+        self.transfers = 0
 
         # Served to the compositor on demand; kept until the selection changes,
         # because a single paste can trigger several SelectionTransfer calls.
@@ -217,6 +250,7 @@ class TextInjector:
     def _on_transfer(self, session, mime_type, serial) -> None:
         if session != self.session:
             return
+        self.transfers += 1
         try:
             reply, fds = self.portal.bus.call_with_unix_fd_list_sync(
                 PORTAL_BUS, PORTAL_PATH, CB, "SelectionWrite",
@@ -287,6 +321,7 @@ class TextInjector:
         text: str,
         *,
         chord: str = "ctrl-v",
+        escalate: bool = True,
         restore_clipboard: bool = True,
         delay_ms: int = 60,
         on_done: Callable[[bool, str], None] | None = None,
@@ -308,7 +343,10 @@ class TextInjector:
                 self._saved = saved if restore_clipboard else None
                 self._own_selection(payload)
                 # Let the compositor register the new owner before the chord.
-                GLib.timeout_add(max(delay_ms, 50), lambda: self._do_paste(chord, delay_ms, on_done))
+                GLib.timeout_add(
+                    max(delay_ms, 50),
+                    lambda: self._start_ladder(chord, escalate, delay_ms, on_done),
+                )
 
             if restore_clipboard:
                 self._read_selection(after_save)
@@ -317,22 +355,51 @@ class TextInjector:
 
         self.ensure_session(proceed)
 
-    def _do_paste(self, chord: str, delay_ms: int, on_done) -> bool:
-        try:
-            self.send_chord(chord)
-        except GLib.Error as exc:
-            if on_done:
-                on_done(False, exc.message)
-            return GLib.SOURCE_REMOVE
+    def _start_ladder(
+        self, chord: str, escalate: bool, delay_ms: int, on_done
+    ) -> bool:
+        baseline = self.transfers
+        ladder = list(LADDER) if escalate else [chord]
+        if escalate and baseline > EAGER_PULLS:
+            # More reads than the compositor's own before any chord was sent, so
+            # a clipboard manager is taking every selection. A receipt no longer
+            # means an application pasted, and escalating on a meaningless one
+            # would paste up to three times.
+            log.info("clipboard read before pasting; sending %s alone", chord)
+            ladder = [chord]
+        return self._step(ladder, 0, baseline, delay_ms, on_done)
 
-        if self._saved is not None:
-            saved = self._saved
-            self._saved = None
-            # Give the target app time to actually read the selection before we
-            # hand ownership back to the previous contents.
+    def _step(
+        self, ladder: list[str], i: int, baseline: int, delay_ms: int, on_done
+    ) -> bool:
+        if i and self.transfers > baseline:
+            return self._finish(True, "", delay_ms, on_done)
+        if i >= len(ladder):
+            # Every rung ran and nothing read the clipboard. With a single rung
+            # we cannot tell a missing receipt from a target that never pastes,
+            # so keep the old, optimistic report there.
+            ok = len(ladder) == 1
+            return self._finish(
+                ok, "" if ok else "nothing read the clipboard", delay_ms, on_done
+            )
+        try:
+            self.send_chord(ladder[i])
+        except GLib.Error as exc:
+            return self._finish(False, exc.message, delay_ms, on_done)
+        GLib.timeout_add(
+            SETTLE_MS,
+            lambda: self._step(ladder, i + 1, baseline, delay_ms, on_done),
+        )
+        return GLib.SOURCE_REMOVE
+
+    def _finish(self, ok: bool, why: str, delay_ms: int, on_done) -> bool:
+        saved, self._saved = self._saved, None
+        if saved is not None:
+            # Only once the ladder has stopped. Restoring mid-escalation would
+            # leave later rungs pasting the previous clipboard contents.
             GLib.timeout_add(max(delay_ms * 4, 250), lambda: self._restore(saved))
         if on_done:
-            on_done(True, "")
+            on_done(ok, why)
         return GLib.SOURCE_REMOVE
 
     def _restore(self, saved: bytes) -> bool:

@@ -73,6 +73,10 @@ also where you can quit it.
   active keyboard layout and silently drops anything not on it, which truncates
   transcriptions at the first accented character. Pasting carries arbitrary
   Unicode intact.
+- **Terminals work without a second shortcut.** No one paste shortcut works
+  everywhere — terminals use Ctrl+Shift+V, most other applications Ctrl+V — and
+  a sandboxed app on GNOME cannot see which application has focus. Scribe sends
+  each shortcut in turn and stops as soon as something reads the clipboard.
 - **Consent is asked once.** The RemoteDesktop grant is persisted with a restore
   token, so dictation does not prompt every session.
 

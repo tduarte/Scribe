@@ -188,6 +188,52 @@ Because the transfer is served on the main loop, **nothing in the paste path may
 block**. An early version of `spikes/spike_inject.py` used `time.sleep` between
 `SetSelection` and Ctrl+V and could not serve the transfer at all.
 
+## Clipboard portal: mutter pulls once even when nobody pastes
+
+`spikes/spike_paste_ladder.py idle` owns the selection, sends no chord, and
+waits. A single `SelectionTransfer` still arrives, **+1.1 ms after
+`SetSelection`**, with no clipboard manager running. So a transfer is not
+unconditionally a paste receipt: one of them is the compositor's own.
+
+It is a receipt *relative to a baseline*, which is what makes the escalating
+paste below possible. Take the transfer count just before sending a chord — by
+then the eager pull has long since happened — and any further transfer means an
+application read the clipboard. `EAGER_PULLS` in `src/portals/inject.py` records
+the one pull that is normal; more than that before the first chord means
+something is reading every selection and receipts are meaningless.
+
+## No paste chord works everywhere, so Scribe escalates
+
+Ctrl+V is quoted-insert in a terminal: it swallows the next escape sequence and
+leaves `^V` on the prompt. Terminals want Ctrl+Shift+V, which GTK text widgets do
+not bind at all. Read from upstream source and the live keymap:
+
+| Chord | GTK4 | GTK3 | VTE (Ptyxis, Console) | ghostty |
+|---|---|---|---|---|
+| `XF86Paste` | yes (`gtktext.c`, `gtktextview.c`) | no binding | no binding | yes (`paste=paste_from_clipboard`) |
+| Ctrl+V | yes | yes | quoted-insert, emits `^V` junk | no |
+| Ctrl+Shift+V | unbound | unbound | yes | yes |
+| Shift+Insert | yes | yes | pastes the **primary** selection, i.e. the wrong text | same |
+
+`XF86Paste` (`0x1008FF6D`) resolves to **keycode 143** in the active keymap via
+`Gdk.Display.map_keyval`, so mutter can deliver it — unlike accented characters,
+which resolve to no keycode and are the documented reason typing was abandoned.
+
+Which app has focus is **not** knowable from a sandbox here:
+`org.gnome.Shell.Introspect.GetWindows` returns `AccessDenied` even unsandboxed,
+`wlr_foreign_toplevel` is absent, and over AT-SPI no window reports `ACTIVE`
+while ghostty publishes no app name at all. So Scribe sends chords in turn and
+stops on the first receipt. Rungs are ordered by how each one fails when it is
+not the right one, since every rung that misses still lands on the target:
+`XF86Paste` and Ctrl+Shift+V are simply unbound where unsupported, whereas
+Ctrl+V leaves visible junk, so Ctrl+V goes last.
+
+> A trap worth knowing when probing this by hand: `send_chord` falls back to
+> Ctrl+V for a chord name it does not know. A probe that "sent `XF86Paste`" from
+> a build without that entry really sent Ctrl+V, armed readline's quoted-insert,
+> and made the *next* paste show up as `^[[200~text~` — bracketed-paste markers
+> rendered literally, one run late. The terminal was fine; the probe was not.
+
 ## Vulkan throughput on RDNA4 (not a portal finding, but worth recording)
 
 whisper.cpp built with `GGML_VULKAN=1` inside `org.gnome.Sdk//50`, running on an
