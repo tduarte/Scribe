@@ -2,10 +2,23 @@
 # Run flatpak-builder-lint over an exported repo, tolerating the two findings
 # that cannot be cleared outside Flathub's own build infrastructure.
 #
-# Screenshots are mirrored to dl.flathub.org by Flathub's builders. Locally and
-# in CI, appstream-compose finds no media directory to commit ("Media directory
-# does not exist, skipping commit"), so both checks below fail no matter what
-# the app does. Every other finding is a real failure.
+# All three findings below are about mirroring assets to dl.flathub.org, which
+# only Flathub's own builders can write to.
+#
+#   appstream-external-screenshot-url        the catalog points at our GitHub
+#                                            raw URLs, not the Flathub mirror
+#   appstream-screenshots-not-mirrored-in-ostree
+#                                            appstream-compose found no media to
+#                                            commit ("Media directory does not
+#                                            exist, skipping commit")
+#   appstream-remote-icon-not-mirrored       induced BY asking for mirroring:
+#                                            with --mirror-screenshots-url the
+#                                            catalog rewrites the icon to a
+#                                            dl.flathub.org URL we cannot fill.
+#                                            Build without the mirror flags and
+#                                            it does not appear at all.
+#
+# Every other finding is a real failure.
 #
 # Usage: build-aux/lint-repo.sh <repo-dir>
 set -uo pipefail
@@ -26,6 +39,7 @@ import json, sys
 INFRA_ONLY = {
     "appstream-external-screenshot-url",
     "appstream-screenshots-not-mirrored-in-ostree",
+    "appstream-remote-icon-not-mirrored",
 }
 
 raw = sys.argv[1].strip()

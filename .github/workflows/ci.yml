@@ -18,12 +18,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.13'
-      - run: pip install pytest
+
+      # The suite imports GLib, so it needs the distro PyGObject rather than a
+      # clean setup-python interpreter, which cannot see the system `gi`.
+      # GLib is the only typelib required -- no Gtk, no Gst.
+      - name: Install PyGObject and pytest
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-gi python3-pytest
+
       - name: Run pytest
-        run: python -m pytest tests -q
+        run: python3 -m pytest tests -q
 
   metadata:
     name: Metadata
@@ -90,18 +95,11 @@ jobs:
           build-bundle: true
           verbose: true
 
-      # appstream-compose only writes this directory when it managed to mirror
-      # the screenshots. Flathub's builders do that; this workflow generally
-      # cannot, so the commit is conditional rather than a hard failure.
-      - name: Commit the mirrored screenshots into the repo
-        run: |
-          media=flatpak_app/files/share/app-info/media
-          if [ -d "$media" ]; then
-            ostree commit --repo=repo --canonical-permissions \
-              --branch=screenshots/x86_64 "$media"
-          else
-            echo "::notice::no mirrored media; Flathub mirrors screenshots itself"
-          fi
+      # No ostree commit step here: given mirror-screenshots-url, the build
+      # action already runs
+      #   ostree commit --repo=repo --branch=screenshots/x86_64 \
+      #     flatpak_app/files/share/app-info/media
+      # itself. Doing it again is redundant.
 
       # Fails on every finding except the two that only Flathub's own
       # infrastructure can clear. See the script for why.
