@@ -36,6 +36,21 @@ devices=dri;
 filesystems=xdg-run/pipewire-0:ro;
 ```
 
+## Performance
+
+Measured on an AMD Radeon RX 9070 XT (RDNA4, `gfx1201`, RADV) with
+`large-v3-turbo-q5_0`, transcribing an 11-second clip:
+
+| Backend | Time | Speed |
+|---|---|---|
+| Vulkan | **0.22 s** | 50x realtime |
+| CPU (Ryzen 9 9900X) | 9.47 s | 1.2x realtime |
+
+Vulkan is worth roughly a **43x speedup** on this model, which is what makes the
+larger, more accurate models usable for dictation. Note the reverse holds for
+`tiny`: it is so small that dispatch overhead dominates and the CPU is slightly
+faster, so the GPU only starts paying off from `small` upwards.
+
 ## Requirements
 
 - GNOME 48 or newer (the GlobalShortcuts portal landed in 48; developed against 50)

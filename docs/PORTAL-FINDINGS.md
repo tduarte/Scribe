@@ -159,3 +159,19 @@ available until the selection is replaced — not free it after the first transf
 Because the transfer is served on the main loop, **nothing in the paste path may
 block**. An early version of `spikes/spike_inject.py` used `time.sleep` between
 `SetSelection` and Ctrl+V and could not serve the transfer at all.
+
+## Vulkan throughput on RDNA4 (not a portal finding, but worth recording)
+
+whisper.cpp built with `GGML_VULKAN=1` inside `org.gnome.Sdk//50`, running on an
+RX 9070 XT (`gfx1201`, RADV, `matrix cores: KHR_coopmat`), 11 s of speech:
+
+| Model | Vulkan | CPU (Ryzen 9 9900X) |
+|---|---|---|
+| `large-v3-turbo-q5_0` | 0.22 s (50x realtime) | 9.47 s (1.2x realtime) |
+| `tiny-q5_1` | 0.26 s (43x realtime) | 0.22 s (50x realtime) |
+
+The crossover matters: for `tiny` the GPU is marginally *slower*, because
+dispatch overhead dominates a 32 MB model. Vulkan is worth ~43x on turbo.
+
+`--device=dri` is sufficient for this; ROCm (`/dev/kfd`, `--device=all`) is not
+needed and would not be permitted on Flathub anyway.
