@@ -24,6 +24,7 @@ class ModelsPage(Gtk.Box):
         self.store = application.models
         self._downloads: dict[str, Download] = {}
         self._progress: dict[str, Gtk.ProgressBar] = {}
+        self._syncing = False
 
         self.page = Adw.PreferencesPage()
         scroller = Gtk.ScrolledWindow(vexpand=True)
@@ -40,8 +41,17 @@ class ModelsPage(Gtk.Box):
         actions.add_action(remove)
         self.insert_action_group("models", actions)
 
-        self.settings.connect("changed::active-model", lambda *_: self.refresh())
+        # Rebuilt on the next main-loop pass: the change usually arrives from a
+        # toggle on a row this is about to destroy.
+        self.settings.connect(
+            "changed::active-model",
+            lambda *_: GLib.idle_add(self._refresh_idle),
+        )
         self.refresh()
+
+    def _refresh_idle(self) -> bool:
+        self.refresh()
+        return GLib.SOURCE_REMOVE
 
     # -- rendering -------------------------------------------------------
 
@@ -71,8 +81,16 @@ class ModelsPage(Gtk.Box):
                 "Nothing installed yet. Choose one below to start dictating."
             ),
         )
+        # Choosing the active model is an exclusive choice over a list, which
+        # the HIG models with radio rows rather than a button on every row and
+        # a status label on the chosen one.
+        self._syncing = True
+        leader: Gtk.CheckButton | None = None
         for model in installed:
-            self._installed_group.add(self._installed_row(model, model.id == active))
+            row, check = self._installed_row(model, model.id == active, leader)
+            leader = leader or check
+            self._installed_group.add(row)
+        self._syncing = False
         self.page.add(self._installed_group)
 
         self._available_group = Adw.PreferencesGroup(
@@ -89,19 +107,19 @@ class ModelsPage(Gtk.Box):
                      else f"{model.languages} languages")
         return f"{model.size_label} · {languages} · {TIER_LABEL.get(model.tier, '')}"
 
-    def _installed_row(self, model, is_active: bool) -> Adw.ActionRow:
+    def _installed_row(self, model, is_active: bool,
+                       leader: Gtk.CheckButton | None):
         row = Adw.ActionRow(title=model.name, subtitle=self._subtitle(model))
 
-        if is_active:
-            badge = Gtk.Label(label="In use")
-            badge.add_css_class("caption")
-            badge.add_css_class("accent")
-            badge.set_valign(Gtk.Align.CENTER)
-            row.add_suffix(badge)
-        else:
-            use = Gtk.Button(label="Use", valign=Gtk.Align.CENTER)
-            use.connect("clicked", lambda *_: self.select(model))
-            row.add_suffix(use)
+        check = Gtk.CheckButton(valign=Gtk.Align.CENTER)
+        if leader is not None:
+            check.set_group(leader)
+        check.set_active(is_active)
+        check.connect("toggled", self._on_model_toggled, model)
+        row.add_prefix(check)
+        # Activating anywhere on the row picks the model, so the whole row is
+        # the target rather than a small control at its edge.
+        row.set_activatable_widget(check)
 
         menu = Gio.Menu()
         menu.append("Remove", f"models.remove::{model.id}")
@@ -110,7 +128,14 @@ class ModelsPage(Gtk.Box):
             valign=Gtk.Align.CENTER, css_classes=["flat"],
             tooltip_text="More options",
         ))
-        return row
+        return row, check
+
+    def _on_model_toggled(self, check: Gtk.CheckButton, model) -> None:
+        # Ignore the toggles emitted while the list is being rebuilt.
+        if self._syncing or not check.get_active():
+            return
+        if self.settings.get_string("active-model") != model.id:
+            self.settings.set_string("active-model", model.id)
 
     def _available_row(self, model) -> Adw.ActionRow:
         row = Adw.ActionRow(title=model.name, subtitle=self._subtitle(model))
@@ -137,10 +162,6 @@ class ModelsPage(Gtk.Box):
         return row
 
     # -- actions ---------------------------------------------------------
-
-    def select(self, model) -> None:
-        self.settings.set_string("active-model", model.id)
-        self.refresh()
 
     def download(self, model) -> None:
         if model.id in self._downloads:
