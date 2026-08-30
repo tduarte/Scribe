@@ -81,22 +81,39 @@ class ScribeApplication(Adw.Application):
 
         return [
             entry("background", "\0", "Start without showing a window"),
-            entry("toggle", "\0", "Start or stop dictation, then exit"),
-            entry("cancel", "\0", "Cancel dictation in progress, then exit"),
+            entry("toggle", "\0", "Start or stop dictation"),
+            entry("cancel", "\0", "Cancel the dictation in progress"),
             entry("version", "v", "Show the version and exit"),
         ]
+
+    def do_handle_local_options(self, options: GLib.VariantDict) -> int:
+        """Answer --version before the application is registered.
+
+        Everything in do_startup -- GStreamer, the history database, the
+        Background portal request -- happens before do_command_line is reached,
+        which is far too much machinery for printing one line.
+        """
+        if options.contains("version"):
+            print(f"Scribe {self.version}")
+            return 0
+        return -1
 
     def do_command_line(self, command_line: Gio.ApplicationCommandLine) -> int:
         opts = command_line.get_options_dict().end().unpack()
 
-        if "version" in opts:
-            command_line.print_literal(f"Scribe {self.version}\n")
-            return 0
         if "toggle" in opts:
+            # Remote invocations are handled by the Scribe already running.
+            # Launched fresh, this process *is* Scribe, so it has to stay alive:
+            # returning here would shut the recording down as it started.
+            if not command_line.get_is_remote():
+                self._start_hidden = True
+                self.activate()
             self.activate_action("toggle", None)
             return 0
         if "cancel" in opts:
-            self.activate_action("cancel", None)
+            # Nothing to cancel in a process that has only just started.
+            if command_line.get_is_remote():
+                self.activate_action("cancel", None)
             return 0
 
         self._start_hidden = "background" in opts or self.settings.get_boolean(
