@@ -51,7 +51,14 @@ def human_error(exc: BaseException) -> str:
 class ModelStore:
     """Knows the catalog, what is downloaded, and how to fetch the rest."""
 
-    def __init__(self, catalog_path: str, data_dir: str | None = None) -> None:
+    def __init__(
+        self,
+        catalog_path: str,
+        data_dir: str | None = None,
+        *,
+        user_agent: str = "Scribe",
+    ) -> None:
+        self.user_agent = user_agent
         with open(catalog_path, encoding="utf-8") as fh:
             raw = json.load(fh)
         self.catalog_version: int = raw.get("catalog_version", 1)
@@ -166,7 +173,7 @@ class Download:
             return
 
         session = Soup.Session()
-        session.set_user_agent("Scribe/0.1")
+        session.set_user_agent(self.store.user_agent)
         self._session = session  # keep alive for the life of the request
         message = Soup.Message.new("GET", self.model.url)
         session.send_async(

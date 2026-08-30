@@ -148,7 +148,10 @@ class ScribeApplication(Adw.Application):
         audio.init()
         self._load_styles()
 
-        self.models = ModelStore(os.path.join(self.pkgdatadir, "models.json"))
+        self.models = ModelStore(
+            os.path.join(self.pkgdatadir, "models.json"),
+            user_agent=f"Scribe/{self.version}",
+        )
         self.history = History()
         self._enforce_history_policy()
         self.settings.connect("changed::history-limit",
