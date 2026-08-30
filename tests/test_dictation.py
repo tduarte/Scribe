@@ -129,6 +129,49 @@ class TestTranscriptionOptions:
         assert p["transcriber"].requests[0]["use_gpu"] is False
 
 
+class TestPreload:
+    """The model has to load while the user speaks, not after they stop."""
+
+    def test_pressing_starts_loading_the_model(self):
+        ctl, p, _ = build()
+        ctl.on_shortcut_press()
+        assert p["transcriber"].preloads == [
+            {"model_path": "/models/ggml-large-v3-turbo-q5_0.bin",
+             "use_gpu": True, "threads": 0}
+        ]
+
+    def test_preload_matches_what_the_transcription_asks_for(self):
+        # The worker keys its resident model on these, so a mismatch would load
+        # the model twice and hand back none of the time the preload bought.
+        ctl, p, _ = build(settings=FakeSettings(**{"accelerator": "cpu",
+                                                   "thread-count": 4}))
+        ctl.on_shortcut_press(); ctl.on_shortcut_release()
+        pre = p["transcriber"].preloads[0]
+        req = p["transcriber"].requests[0]
+        assert pre["model_path"] == req["model_path"]
+        assert (pre["use_gpu"], pre["threads"]) == (req["use_gpu"], req["threads"])
+
+    def test_nothing_is_loaded_when_the_microphone_fails(self):
+        ctl, p, _ = build(recorder=FakeRecorder(fail=True))
+        ctl.on_shortcut_press()
+        assert p["transcriber"].preloads == []
+
+    def test_a_worker_that_cannot_start_leaves_us_idle(self):
+        # The failure arrives from inside start_recording, so it must not be
+        # overwritten by the RECORDING state it interrupted.
+        ctl, p, _ = build()
+        p["transcriber"].on_preload = lambda: ctl.on_error("worker would not start")
+        ctl.on_shortcut_press()
+        assert ctl.state is State.IDLE
+        assert ctl.last_error == "worker would not start"
+        assert p["recorder"].cancelled == 1
+
+    def test_nothing_is_loaded_without_a_model(self):
+        ctl, p, _ = build(model_store=FakeModels(downloaded=False))
+        ctl.on_shortcut_press()
+        assert p["transcriber"].preloads == []
+
+
 class TestResults:
     def test_result_is_cleaned_and_pasted(self):
         ctl, p, _ = build()
