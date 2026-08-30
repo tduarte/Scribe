@@ -118,6 +118,17 @@ def test_staged_audio_is_deleted_once_transcribed(h):
     )
 
 
+def test_staged_audio_is_deleted_when_the_worker_crashes(h):
+    """A crash must not leave the recording sitting in the runtime directory."""
+    h.t.start()
+    pump(lambda: "ready" in h.states)
+    h.t.transcribe(AUDIO, model_path="/m.bin", crash=True)
+    assert pump(lambda: h.errors)
+    assert not os.path.exists(h.t._audio_path), (
+        "the staged recording survived a worker crash"
+    )
+
+
 def test_staged_audio_is_deleted_even_when_transcription_fails(h):
     h.t.start()
     pump(lambda: "ready" in h.states)

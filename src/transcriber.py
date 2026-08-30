@@ -10,12 +10,15 @@ from __future__ import annotations
 import json
 import logging
 import os
-import struct
 from typing import Callable
 
 from gi.repository import Gio, GLib
 
 log = logging.getLogger(__name__)
+
+# Consecutive failed reads from the worker's pipe before the stream is
+# abandoned. A crash is reported by _on_exit rather than from here.
+MAX_READ_ERRORS = 3
 
 
 class Transcriber:
@@ -39,6 +42,7 @@ class Transcriber:
         self._stdout: Gio.DataInputStream | None = None
         self._ready = False
         self._busy = False
+        self._read_errors = 0
         self.loaded_model: str | None = None
         self.system_info: str = ""
         self._audio_path = os.path.join(
@@ -98,6 +102,8 @@ class Transcriber:
         self._stdout = None
         self._ready = False
         self.loaded_model = None
+        # Nothing consumed the staged recording, and nothing is going to now.
+        self._discard_audio()
         if self._busy:
             self._busy = False
             self._fail("the transcription worker crashed; it will be restarted")
@@ -121,7 +127,15 @@ class Transcriber:
             raw, _ = stream.read_line_finish(res)
         except GLib.Error as exc:
             log.debug("worker read failed: %s", exc.message)
+            # A worker that has died is _on_exit's business. Anything else is
+            # transient and must not silently end the protocol stream -- but
+            # retrying a genuinely broken pipe would spin the main loop, so
+            # give up after a few consecutive failures.
+            self._read_errors += 1
+            if stream is self._stdout and self._read_errors <= MAX_READ_ERRORS:
+                self._read_line()
             return
+        self._read_errors = 0
         if raw is None:
             return  # pipe closed; _on_exit handles the rest
 
