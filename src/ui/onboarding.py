@@ -165,3 +165,7 @@ class OnboardingDialog(Adw.Dialog):
         if self.app.window:
             self.app.window.models_page.refresh()
             self.app.window.refresh_shortcut_state()
+        # The second of the two prompts the intro page warned about. Asking for
+        # it here means it arrives with Scribe in front, rather than in the
+        # middle of the first dictation into somebody else's window.
+        self.app.request_paste_permission()
