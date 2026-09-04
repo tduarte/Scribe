@@ -83,8 +83,18 @@ class FakeRecorder:
 class FakeTranscriber:
     def __init__(self):
         self.requests = []
+        self.preloads = []
         self.accept = True
         self.unloaded = 0
+        # Stands in for the worker failing to start, which the real Transcriber
+        # reports synchronously through the controller's on_error.
+        self.on_preload = None
+
+    def preload(self, model_path, *, use_gpu=True, threads=0):
+        self.preloads.append({"model_path": model_path, "use_gpu": use_gpu,
+                              "threads": threads})
+        if self.on_preload:
+            self.on_preload()
 
     def transcribe(self, audio, *, model_path, **options):
         if not self.accept:

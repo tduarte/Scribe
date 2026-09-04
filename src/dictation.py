@@ -80,6 +80,18 @@ class DictationController:
     def active_model(self):
         return self.models.get(self.settings.get_string("active-model"))
 
+    def _engine_options(self) -> dict:
+        """The parameters a model is loaded with.
+
+        Preloading and transcribing must agree on these: the worker keys its
+        resident model on them, so a mismatch would throw away the model that
+        was loaded during the utterance and load it again afterwards.
+        """
+        return {
+            "use_gpu": self.settings.get_string("accelerator") != "cpu",
+            "threads": self.settings.get_int("thread-count"),
+        }
+
     # -- recording -------------------------------------------------------
 
     def toggle(self) -> None:
@@ -124,6 +136,16 @@ class DictationController:
         self._set_state(State.RECORDING)
         self._arm_watchdog()
 
+        # Load the model while the user is still speaking. It is the same work
+        # either way, but done here it happens during the utterance rather than
+        # after the release, which is the only moment the user is waiting.
+        # Last, because a worker that cannot start reports the failure straight
+        # back through on_error, and that has to land on a state machine that
+        # is already recording rather than one still on its way there.
+        self.transcriber.preload(
+            self.models.path_for(model), **self._engine_options()
+        )
+
     def _on_audio_ready(self) -> None:
         """The microphone is genuinely capturing now."""
         if self.state is State.RECORDING:
@@ -156,12 +178,10 @@ class DictationController:
             return GLib.SOURCE_REMOVE
 
         self._set_state(State.TRANSCRIBING)
-        accel = self.settings.get_string("accelerator")
         options = {
             "language": self.settings.get_string("language"),
             "translate": self.settings.get_boolean("translate-to-english"),
-            "use_gpu": accel != "cpu",
-            "threads": self.settings.get_int("thread-count"),
+            **self._engine_options(),
             "vad": self.settings.get_boolean("vad-enabled"),
             "vad_model": self.models.vad_path() or "",
             "vad_threshold": self.settings.get_double("vad-threshold"),

@@ -258,22 +258,28 @@ class DictationPage(Gtk.Box):
 
     def refresh_shortcut_state(self) -> None:
         app = self.app
-        if app.shortcut_error:
-            self._set_shortcut_widgets([])
-            self.status.set_description(
-                "The dictation shortcut could not be registered. "
-                "You can still dictate from this window."
-            )
-            return
-
         trigger = ""
-        if app.shortcuts and app.shortcuts.triggers:
+        if not app.shortcut_error and app.shortcuts and app.shortcuts.triggers:
             trigger = app.shortcuts.triggers.get("dictate", "")
         caps = keycaps(trigger)
         self._set_shortcut_widgets(caps)
-        self.status.set_description(
-            None if caps else "Set a shortcut to dictate from anywhere."
-        )
+        self.status.set_description(self._description(caps))
+
+    def _description(self, caps: list[str]) -> str | None:
+        """Whatever currently stands between the user and dictating.
+
+        The shortcut comes first: without it there is no dictation to insert.
+        """
+        if self.app.shortcut_error:
+            return ("The dictation shortcut could not be registered. "
+                    "You can still dictate from this window.")
+        if self.app.injector_error:
+            return ("Scribe was not allowed to paste into other applications, "
+                    "so dictated text cannot be inserted for you. Copying it "
+                    "from here still works.")
+        if not caps:
+            return "Set a shortcut to dictate from anywhere."
+        return None
 
     def _update_footer(self) -> None:
         model = self.app.models.get(self.settings.get_string("active-model"))

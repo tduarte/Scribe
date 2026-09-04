@@ -62,6 +62,7 @@ class ScribeApplication(Adw.Application):
         self._held = False
         self._start_hidden = False
         self.shortcut_error: str = ""
+        self.injector_error: str = ""
 
         self.add_main_option_entries(self._options())
         self._add_actions()
@@ -81,22 +82,39 @@ class ScribeApplication(Adw.Application):
 
         return [
             entry("background", "\0", "Start without showing a window"),
-            entry("toggle", "\0", "Start or stop dictation, then exit"),
-            entry("cancel", "\0", "Cancel dictation in progress, then exit"),
+            entry("toggle", "\0", "Start or stop dictation"),
+            entry("cancel", "\0", "Cancel the dictation in progress"),
             entry("version", "v", "Show the version and exit"),
         ]
+
+    def do_handle_local_options(self, options: GLib.VariantDict) -> int:
+        """Answer --version before the application is registered.
+
+        Everything in do_startup -- GStreamer, the history database, the
+        Background portal request -- happens before do_command_line is reached,
+        which is far too much machinery for printing one line.
+        """
+        if options.contains("version"):
+            print(f"Scribe {self.version}")
+            return 0
+        return -1
 
     def do_command_line(self, command_line: Gio.ApplicationCommandLine) -> int:
         opts = command_line.get_options_dict().end().unpack()
 
-        if "version" in opts:
-            command_line.print_literal(f"Scribe {self.version}\n")
-            return 0
         if "toggle" in opts:
+            # Remote invocations are handled by the Scribe already running.
+            # Launched fresh, this process *is* Scribe, so it has to stay alive:
+            # returning here would shut the recording down as it started.
+            if not command_line.get_is_remote():
+                self._start_hidden = True
+                self.activate()
             self.activate_action("toggle", None)
             return 0
         if "cancel" in opts:
-            self.activate_action("cancel", None)
+            # Nothing to cancel in a process that has only just started.
+            if command_line.get_is_remote():
+                self.activate_action("cancel", None)
             return 0
 
         self._start_hidden = "background" in opts or self.settings.get_boolean(
@@ -131,7 +149,10 @@ class ScribeApplication(Adw.Application):
         audio.init()
         self._load_styles()
 
-        self.models = ModelStore(os.path.join(self.pkgdatadir, "models.json"))
+        self.models = ModelStore(
+            os.path.join(self.pkgdatadir, "models.json"),
+            user_agent=f"Scribe/{self.version}",
+        )
         self.history = History()
         self._enforce_history_policy()
         self.settings.connect("changed::history-limit",
@@ -151,6 +172,7 @@ class ScribeApplication(Adw.Application):
         self.injector = TextInjector(
             get_token=lambda: self.settings.get_string("remote-desktop-token"),
             set_token=lambda t: self.settings.set_string("remote-desktop-token", t),
+            on_state_change=self._on_injector_state,
         )
 
         self.recorder = audio.Recorder(
@@ -290,6 +312,22 @@ class ScribeApplication(Adw.Application):
     def _configure_shortcuts(self) -> None:
         if self.shortcuts:
             self.shortcuts.configure()
+
+    def _on_injector_state(self, state: InjectorState, detail: str) -> None:
+        self.injector_error = detail if state is InjectorState.UNAVAILABLE else ""
+        if self.window:
+            self.window.refresh_shortcut_state()
+
+    def request_paste_permission(self) -> None:
+        """Ask for the RemoteDesktop grant now rather than mid-dictation.
+
+        Left to itself the session is created by the first paste, which puts
+        GNOME's consent dialog on screen just as the transcript is due to land
+        in another application -- after the user has already spoken, with the
+        focus about to move. Asking while Scribe's own window is in front costs
+        the same one prompt at a moment that makes sense.
+        """
+        self.injector.ensure_session()
 
     def _request_background(self) -> None:
         self.background.request(

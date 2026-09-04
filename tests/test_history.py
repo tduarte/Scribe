@@ -44,6 +44,26 @@ def test_search_matches_substring(hist):
     assert [e.text for e in hist.search("deploy")] == ["deploy to production"]
 
 
+def test_search_wildcards_are_literal(hist):
+    # LIKE would otherwise read % and _ as wildcards and match everything.
+    hist.add("100% done")
+    hist.add("nothing to do with it")
+    assert [e.text for e in hist.search("%")] == ["100% done"]
+    assert hist.search("100%") == hist.search("100% done")
+
+
+def test_search_underscore_is_literal(hist):
+    hist.add("snake_case name")
+    hist.add("snake case name")
+    assert [e.text for e in hist.search("snake_case")] == ["snake_case name"]
+
+
+def test_search_backslash_is_literal(hist):
+    hist.add(r"a back\slash")
+    hist.add("no slash here")
+    assert [e.text for e in hist.search("back\\")] == [r"a back\slash"]
+
+
 def test_blank_search_returns_everything(hist):
     hist.add("a"); hist.add("b")
     assert len(hist.search("   ")) == 2

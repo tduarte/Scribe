@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from gi.repository import Adw, Gio, GObject, Gtk
+from gi.repository import Adw, Gio, GLib, GObject, Gtk
 
 import audio
 
@@ -13,6 +13,10 @@ LANGUAGES = [
     ("tr", "Turkish"), ("ar", "Arabic"), ("hi", "Hindi"), ("zh", "Chinese"),
     ("ja", "Japanese"), ("ko", "Korean"),
 ]
+
+# Custom words are edited a keystroke at a time; settling before writing keeps
+# one GSettings write per pause rather than one per letter.
+WORDS_SETTLE_MS = 500
 
 UNLOAD_CHOICES = [
     (0, "Never"), (15, "After 15 seconds"), (120, "After 2 minutes"),
@@ -38,10 +42,14 @@ class PreferencesDialog(Adw.PreferencesDialog):
         super().__init__()
         self.app = application
         self.settings = application.settings
+        self._words_timer: int | None = None
 
         self.add(self._general_page())
         self.add(self._audio_page())
         self.add(self._text_page())
+
+        # Closing the dialog mid-word must not lose the last edit.
+        self.connect("closed", lambda *_: self._flush_words())
 
     # -- General ---------------------------------------------------------
 
@@ -313,7 +321,20 @@ class PreferencesDialog(Adw.PreferencesDialog):
         page.add(vocab)
         return page
 
-    def _save_words(self, buffer: Gtk.TextBuffer) -> None:
+    def _save_words(self, _buffer: Gtk.TextBuffer) -> None:
+        self._cancel_words_timer()
+        self._words_timer = GLib.timeout_add(WORDS_SETTLE_MS, self._flush_words)
+
+    def _cancel_words_timer(self) -> None:
+        if self._words_timer is not None:
+            GLib.source_remove(self._words_timer)
+            self._words_timer = None
+
+    def _flush_words(self) -> bool:
+        self._cancel_words_timer()
+        buffer = self.words_view.get_buffer()
         text = buffer.get_text(buffer.get_start_iter(), buffer.get_end_iter(), False)
         words = [line.strip() for line in text.splitlines() if line.strip()]
-        self.settings.set_strv("custom-words", words)
+        if words != list(self.settings.get_strv("custom-words")):
+            self.settings.set_strv("custom-words", words)
+        return GLib.SOURCE_REMOVE

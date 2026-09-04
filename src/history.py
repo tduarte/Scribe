@@ -28,6 +28,10 @@ log = logging.getLogger(__name__)
 
 SCHEMA_VERSION = 1
 
+# LIKE treats % and _ as wildcards, so a search for "100%" would otherwise
+# match every stored transcript. Escaped with a backslash, declared per query.
+_LIKE_ESCAPE = str.maketrans({"\\": "\\\\", "%": "\\%", "_": "\\_"})
+
 
 @dataclass(frozen=True)
 class Entry:
@@ -99,9 +103,9 @@ class History:
         if not query.strip():
             return self.recent(limit)
         rows = self.db.execute(
-            "SELECT * FROM transcripts WHERE text LIKE ? "
+            "SELECT * FROM transcripts WHERE text LIKE ? ESCAPE '\\' "
             "ORDER BY created_at DESC LIMIT ?",
-            (f"%{query}%", limit),
+            (f"%{query.translate(_LIKE_ESCAPE)}%", limit),
         ).fetchall()
         return [self._entry(r) for r in rows]
 
