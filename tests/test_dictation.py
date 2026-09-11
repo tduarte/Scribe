@@ -181,6 +181,26 @@ class TestCancel:
         assert p["history"].entries[0][2] == "turbo"
 
 
+class TestLanguageAwareFillers:
+    def test_whispers_language_decides_the_filler_list(self):
+        ctl, p, _ = build()
+        ctl.on_shortcut_press(); ctl.on_shortcut_release()
+        ctl.on_result("ah, er ist da", "de", 10)
+        assert p["injector"].pasted[0]["text"] == "Ah, er ist da"
+
+    def test_translation_output_is_english(self):
+        ctl, p, _ = build(settings=FakeSettings(**{"translate-to-english": True}))
+        ctl.on_shortcut_press(); ctl.on_shortcut_release()
+        ctl.on_result("er, okay", "de", 10)
+        assert p["injector"].pasted[0]["text"] == "Okay"
+
+    def test_the_configured_language_is_the_fallback(self):
+        ctl, p, _ = build(settings=FakeSettings(language="de"))
+        ctl.on_shortcut_press(); ctl.on_shortcut_release()
+        ctl.on_result("ah, er ist da", "", 10)
+        assert p["injector"].pasted[0]["text"] == "Ah, er ist da"
+
+
 class TestResultHandlerFailure:
     def test_a_bug_while_handling_the_result_does_not_strand_the_state_machine(self):
         ctl, p, _ = build()

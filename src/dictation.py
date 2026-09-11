@@ -289,8 +289,16 @@ class DictationController:
             self._fail("Could not process the transcription.")
 
     def _handle_result(self, text: str, language: str, duration_ms: int) -> None:
+        # What the text is in, for the filler list: translation makes it
+        # English; otherwise trust what Whisper heard, then the setting.
+        configured = self.settings.get_string("language")
+        if self.settings.get_boolean("translate-to-english"):
+            spoken = "en"
+        else:
+            spoken = language or ("" if configured == "auto" else configured)
         cleaned = postprocess(
             text,
+            language=spoken,
             custom_words=list(self.settings.get_strv("custom-words")),
             word_threshold=self.settings.get_double("word-correction-threshold"),
             remove_filler_words=self.settings.get_boolean("remove-filler-words"),
