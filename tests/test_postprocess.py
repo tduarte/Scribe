@@ -38,6 +38,21 @@ class TestFillers:
     def test_case_insensitive(self):
         assert remove_fillers("Um okay") == "okay"
 
+    def test_english_only_fillers_are_kept_in_other_languages(self):
+        # "er" is German for "he"; "ah" is a word in Portuguese and Spanish.
+        assert remove_fillers("Ah, er ist da", language="de") == "Ah, er ist da"
+        assert remove_fillers("ah sim, um momento", language="pt") == "ah sim, momento"
+
+    def test_neutral_grunts_go_in_every_language(self):
+        assert remove_fillers("hmm um das ist uh gut", language="de") == "das ist gut"
+
+    def test_custom_fillers_apply_in_every_language(self):
+        assert remove_fillers("also er kommt", extra=["also"], language="de") == "er kommt"
+
+    def test_unknown_language_is_treated_as_english(self):
+        assert remove_fillers("er okay", language="") == "okay"
+        assert remove_fillers("er okay", language="en-US") == "okay"
+
 
 class TestCustomWords:
     def test_near_miss_corrected(self):
@@ -60,6 +75,50 @@ class TestCustomWords:
 
     def test_empty_vocabulary_is_a_noop(self):
         assert apply_custom_words("anything at all", []) == "anything at all"
+
+    # The cases below were reproduced against the shipped matcher; each one
+    # rewrote a word the user actually said.
+
+    def test_a_longer_word_containing_the_entry_is_not_rewritten(self):
+        assert apply_custom_words("please describe the problem", ["Scribe"]) == \
+            "please describe the problem"
+
+    def test_possessives_and_plurals_keep_their_inflection(self):
+        assert apply_custom_words("Scribe's window and two scribes", ["Scribe"]) == \
+            "Scribe's window and two Scribes"
+
+    def test_short_entries_never_fuzzy_match(self):
+        assert apply_custom_words("he is here", ["her"]) == "he is here"
+
+    def test_a_word_that_differs_only_by_a_plural_is_left_alone(self):
+        assert apply_custom_words("run the tests then test it", ["tests"]) == \
+            "run the tests then test it"
+
+    def test_a_near_miss_keeps_its_inflection(self):
+        assert apply_custom_words("kubernetis's pods", ["Kubernetes"]) == \
+            "Kubernetes's pods"
+        assert apply_custom_words("both kubernetises", ["Kubernetes"]) == \
+            "both Kuberneteses"
+
+    def test_a_near_miss_of_a_very_different_length_is_left_alone(self):
+        assert apply_custom_words("kubernetistic", ["Kubernetes"]) == "kubernetistic"
+
+    def test_multi_word_entries_match_a_run_of_tokens(self):
+        assert apply_custom_words("fly to new yorck tomorrow", ["New York"]) == \
+            "fly to New York tomorrow"
+        assert apply_custom_words("fly to new york tomorrow", ["New York"]) == \
+            "fly to New York tomorrow"
+
+    def test_multi_word_entries_need_the_words_adjacent(self):
+        assert apply_custom_words("new, york", ["New York"]) == "new, york"
+
+    def test_the_longest_phrase_wins(self):
+        assert apply_custom_words("in new york city", ["New York", "New York City"]) == \
+            "in New York City"
+
+    def test_accented_entries_still_match(self):
+        assert apply_custom_words("we went to sao paulo", ["São Paulo"]) == \
+            "we went to São Paulo"
 
 
 class TestWhitespaceAndCaps:
@@ -91,3 +150,7 @@ class TestPipeline:
 
     def test_fillers_can_be_kept(self):
         assert process("um hello", remove_filler_words=False) == "Um hello"
+
+    def test_language_reaches_the_filler_step(self):
+        assert process("Ah, er ist da", language="de") == "Ah, er ist da"
+        assert process("Ah, er ist da") == "Ist da"

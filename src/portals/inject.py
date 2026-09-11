@@ -105,21 +105,38 @@ class TextInjector:
         self.state = InjectorState.IDLE
         self.session: str | None = None
         self.clipboard_enabled = False
+        self._closed_sub: int | None = None
+        self._owner_watch: int | None = None
+        # Keysyms currently held down through the portal. Whatever happens,
+        # these are released before the session goes away, or the user is
+        # left with a stuck Ctrl for the whole desktop.
+        self._pressed: list[int] = []
 
         # Bumped on every SelectionTransfer. A transfer means something read the
-        # clipboard, which is the only paste receipt available to us.
+        # clipboard, which is the only paste receipt available to us. It counts
+        # for the life of the process; anything that reasons about "reads since
+        # we took the selection" must subtract _selection_mark.
         self.transfers = 0
+        self._selection_mark = 0
 
         # Served to the compositor on demand; kept until the selection changes,
         # because a single paste can trigger several SelectionTransfer calls.
         self._payload: bytes = b""
         self._saved: bytes | None = None
+        self._restore_timer: int | None = None
+        # Bumped by abort(); a ladder whose id no longer matches stops.
+        self._ladder_id = 0
         self._waiters: list[Callable[[bool], None]] = []
 
         self.portal.bus.signal_subscribe(
             PORTAL_BUS, CB, "SelectionTransfer", PORTAL_PATH, None,
             Gio.DBusSignalFlags.NONE,
             lambda _c, _s, _p, _i, _sg, params: self._on_transfer(*params.unpack()),
+        )
+        # A portal that dies sends no Closed; its name vanishing is the only
+        # sign that the session went with it.
+        self._owner_watch = self.portal.watch_owner(
+            self._on_portal_vanished, lambda: None
         )
 
     # -- session ---------------------------------------------------------
@@ -157,14 +174,55 @@ class TextInjector:
             cb(ok)
 
     def _fail(self, why: str) -> None:
-        self._set_state(InjectorState.UNAVAILABLE, why)
+        self._drop_session(why, InjectorState.UNAVAILABLE)
+
+    def _drop_session(self, why: str, state=InjectorState.IDLE) -> None:
+        """Forget the session and settle anyone waiting on it with failure.
+
+        IDLE means the next paste quietly creates a fresh session with the
+        stored restore token; UNAVAILABLE means the user has to act first.
+        """
+        self._release_all()
+        self._unwatch_closed()
+        if self.session is not None:
+            log.info("dropping the remote desktop session: %s", why)
+            self.portal.close_session(self.session)
+            self.session = None
+        self.clipboard_enabled = False
+        self._saved = None
+        self._set_state(state, why)
         self._settle(False)
+
+    def _on_closed(self) -> None:
+        # The portal restarted or the user revoked us. The handle is dead, so
+        # skip the Close call and just forget it; the next paste recreates the
+        # session from the stored restore token, without a new consent dialog.
+        log.warning("the remote desktop session was closed by the portal")
+        self._forget_dead_session("session closed by the portal")
+
+    def _on_portal_vanished(self) -> None:
+        if self.session is None and self.state is not InjectorState.CONNECTING:
+            return
+        log.warning("the portal service went away; the remote desktop session is lost")
+        self._forget_dead_session("the portal service went away")
+
+    def _forget_dead_session(self, why: str) -> None:
+        self._pressed.clear()      # nothing to release on a dead session
+        self.session = None
+        self._drop_session(why)
+
+    def _unwatch_closed(self) -> None:
+        if self._closed_sub is not None:
+            self.portal.unsubscribe(self._closed_sub)
+            self._closed_sub = None
 
     def _on_created(self, results, error) -> None:
         if error:
             self._fail(str(error))
             return
         self.session = results["session_handle"]
+        self._unwatch_closed()
+        self._closed_sub = self.portal.watch_session_closed(self.session, self._on_closed)
 
         opts = {
             "types": GLib.Variant("u", DEVICE_KEYBOARD),
@@ -216,10 +274,17 @@ class TextInjector:
         if not devices & DEVICE_KEYBOARD:
             self._fail("no keyboard device was granted")
             return
+        log.debug("session %s started: devices %d, clipboard %s",
+                  self.session, devices, self.clipboard_enabled)
         self._set_state(InjectorState.READY)
         self._settle(True)
 
     def close(self) -> None:
+        self._release_all()
+        self._unwatch_closed()
+        if self._owner_watch is not None:
+            self.portal.unwatch_owner(self._owner_watch)
+            self._owner_watch = None
         if self.session:
             self.portal.close_session(self.session)
             self.session = None
@@ -234,23 +299,51 @@ class TextInjector:
             None, Gio.DBusCallFlags.NONE, -1, None,
         )
 
+    def _press(self, keysym: int) -> None:
+        self._pressed.append(keysym)
+        self._key(keysym, PRESSED)
+
+    def _release(self, keysym: int) -> None:
+        if keysym in self._pressed:
+            self._pressed.remove(keysym)
+        self._key(keysym, RELEASED)
+
+    def _release_all(self) -> None:
+        """Let go of anything still held, most recent first, as best we can."""
+        while self._pressed:
+            keysym = self._pressed.pop()
+            try:
+                self._key(keysym, RELEASED)
+            except GLib.Error as exc:
+                log.debug("releasing key %#x: %s", keysym, exc.message)
+
     def send_chord(self, chord: str) -> None:
-        """Press modifiers, tap the final key, release in reverse order."""
+        """Press modifiers, tap the final key, release in reverse order.
+
+        If any step fails, whatever was already pressed is released before
+        the error propagates: a chord that dies half way must not leave the
+        desktop with a modifier held down.
+        """
         keys = CHORDS.get(chord, CHORDS["ctrl-v"])
         *mods, final = keys
-        for m in mods:
-            self._key(m, PRESSED)
-        self._key(final, PRESSED)
-        self._key(final, RELEASED)
-        for m in reversed(mods):
-            self._key(m, RELEASED)
+        try:
+            for m in mods:
+                self._press(m)
+            self._press(final)
+            self._release(final)
+            for m in reversed(mods):
+                self._release(m)
+        finally:
+            self._release_all()
 
     # -- clipboard -------------------------------------------------------
 
     def _on_transfer(self, session, mime_type, serial) -> None:
         if session != self.session:
+            log.debug("SelectionTransfer for a session that is not ours: %s", session)
             return
         self.transfers += 1
+        log.debug("SelectionTransfer %s serial %s (transfers now %d)", mime_type, serial, self.transfers)
         try:
             reply, fds = self.portal.bus.call_with_unix_fd_list_sync(
                 PORTAL_BUS, PORTAL_PATH, CB, "SelectionWrite",
@@ -274,6 +367,7 @@ class TextInjector:
 
     def _own_selection(self, data: bytes) -> None:
         self._payload = data
+        self._selection_mark = self.transfers
         self.portal.call_noreply(
             CB, "SetSelection",
             GLib.Variant("(oa{sv})", (self.session, {
@@ -303,6 +397,7 @@ class TextInjector:
                 data = src.read_bytes_finish(res).get_data()
             except GLib.Error as exc:
                 log.debug("reading clipboard: %s", exc.message)
+                src.close(None)
                 done(None)
                 return
             if data:
@@ -341,7 +436,17 @@ class TextInjector:
 
             def after_save(saved: bytes | None) -> None:
                 self._saved = saved if restore_clipboard else None
-                self._own_selection(payload)
+                try:
+                    self._own_selection(payload)
+                except GLib.Error as exc:
+                    # The session is gone: the portal restarted, or the user
+                    # revoked us. Report it instead of leaving the caller
+                    # waiting for a chord that will never be sent.
+                    self._saved = None
+                    self._drop_session(exc.message)
+                    if on_done:
+                        on_done(False, f"could not take the clipboard: {exc.message}")
+                    return
                 # Let the compositor register the new owner before the chord.
                 GLib.timeout_add(
                     max(delay_ms, 50),
@@ -355,24 +460,48 @@ class TextInjector:
 
         self.ensure_session(proceed)
 
+    def abort(self) -> None:
+        """Give up on whatever paste is in flight and put the clipboard back.
+
+        The caller has stopped waiting: a consent dialog was left open, or
+        the portal never answered. Pending rungs are dropped, a session still
+        being set up is forgotten, and the saved clipboard goes back now.
+        """
+        self._ladder_id += 1
+        self._release_all()
+        if self.state is InjectorState.CONNECTING:
+            self._set_state(InjectorState.IDLE, "aborted")
+        self._settle(False)
+        if self._restore_timer is not None:
+            GLib.source_remove(self._restore_timer)
+            self._restore_timer = None
+        saved, self._saved = self._saved, None
+        if saved is not None:
+            self._restore(saved)
+
     def _start_ladder(
         self, chord: str, escalate: bool, delay_ms: int, on_done
     ) -> bool:
         baseline = self.transfers
         ladder = list(LADDER) if escalate else [chord]
-        if escalate and baseline > EAGER_PULLS:
-            # More reads than the compositor's own before any chord was sent, so
-            # a clipboard manager is taking every selection. A receipt no longer
-            # means an application pasted, and escalating on a meaningless one
-            # would paste up to three times.
+        if escalate and baseline - self._selection_mark > EAGER_PULLS:
+            # More reads since SetSelection than the compositor's own, before
+            # any chord was sent, so a clipboard manager is taking every
+            # selection. A receipt no longer means an application pasted, and
+            # escalating on a meaningless one would paste up to three times.
             log.info("clipboard read before pasting; sending %s alone", chord)
             ladder = [chord]
-        return self._step(ladder, 0, baseline, delay_ms, on_done)
+        return self._step(ladder, 0, baseline, delay_ms, on_done, self._ladder_id)
 
     def _step(
-        self, ladder: list[str], i: int, baseline: int, delay_ms: int, on_done
+        self, ladder: list[str], i: int, baseline: int, delay_ms: int, on_done,
+        ladder_id: int,
     ) -> bool:
+        if ladder_id != self._ladder_id:
+            return GLib.SOURCE_REMOVE  # aborted while waiting for this rung
         if i and self.transfers > baseline:
+            log.debug("receipt after %s (transfers %d > baseline %d)",
+                      ladder[i - 1], self.transfers, baseline)
             return self._finish(True, "", delay_ms, on_done)
         if i >= len(ladder):
             # Every rung ran and nothing read the clipboard. With a single rung
@@ -382,32 +511,45 @@ class TextInjector:
             return self._finish(
                 ok, "" if ok else "nothing read the clipboard", delay_ms, on_done
             )
+        log.debug("rung %d: sending %s (transfers %d, baseline %d, mark %d)",
+                  i, ladder[i], self.transfers, baseline, self._selection_mark)
         try:
             self.send_chord(ladder[i])
         except GLib.Error as exc:
             return self._finish(False, exc.message, delay_ms, on_done)
         GLib.timeout_add(
             SETTLE_MS,
-            lambda: self._step(ladder, i + 1, baseline, delay_ms, on_done),
+            lambda: self._step(ladder, i + 1, baseline, delay_ms, on_done, ladder_id),
         )
         return GLib.SOURCE_REMOVE
 
     def _finish(self, ok: bool, why: str, delay_ms: int, on_done) -> bool:
-        saved, self._saved = self._saved, None
-        if saved is not None:
+        if self._saved is not None:
             # Only once the ladder has stopped. Restoring mid-escalation would
-            # leave later rungs pasting the previous clipboard contents.
-            GLib.timeout_add(max(delay_ms * 4, 250), lambda: self._restore(saved))
+            # leave later rungs pasting the previous clipboard contents. The
+            # saved bytes stay on the instance until then, so abort() can
+            # put them back early.
+            if self._restore_timer is not None:
+                GLib.source_remove(self._restore_timer)
+            self._restore_timer = GLib.timeout_add(
+                max(delay_ms * 4, 250), self._on_restore_timer
+            )
         if on_done:
             on_done(ok, why)
         return GLib.SOURCE_REMOVE
 
-    def _restore(self, saved: bytes) -> bool:
+    def _on_restore_timer(self) -> bool:
+        self._restore_timer = None
+        saved, self._saved = self._saved, None
+        if saved is not None:
+            self._restore(saved)
+        return GLib.SOURCE_REMOVE
+
+    def _restore(self, saved: bytes) -> None:
         try:
             self._own_selection(saved)
         except GLib.Error as exc:
             log.debug("restoring clipboard: %s", exc.message)
-        return GLib.SOURCE_REMOVE
 
     def copy_only(
         self, text: str, on_done: Callable[[bool, str], None] | None = None
@@ -418,7 +560,13 @@ class TextInjector:
                 if on_done:
                     on_done(False, "clipboard access was not granted")
                 return
-            self._own_selection(text.encode("utf-8"))
+            try:
+                self._own_selection(text.encode("utf-8"))
+            except GLib.Error as exc:
+                self._drop_session(exc.message)
+                if on_done:
+                    on_done(False, f"could not take the clipboard: {exc.message}")
+                return
             if on_done:
                 on_done(True, "")
 

@@ -13,7 +13,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from gi.repository import GLib
 
-from portals.inject import EAGER_PULLS, LADDER, SETTLE_MS, TextInjector
+from portals.inject import (
+    EAGER_PULLS, LADDER, SETTLE_MS, InjectorState, TextInjector,
+)
 
 
 class Ladder:
@@ -28,7 +30,13 @@ class Ladder:
 
         inj = TextInjector.__new__(TextInjector)
         inj.transfers = baseline
+        inj._selection_mark = 0
         inj._saved = b"previous clipboard"
+        inj._restore_timer = None
+        inj._ladder_id = 0
+        inj._pressed = []
+        inj._waiters = []
+        inj.state = InjectorState.READY
         inj.send_chord = self._send
         inj._restore = lambda saved: self.restored.append(saved)
         self.inj = inj
@@ -37,6 +45,11 @@ class Ladder:
         self.sent.append(chord)
         if chord == self.receipt_on:
             self.inj.transfers += 1
+
+    def take_selection(self):
+        """What _own_selection does to the bookkeeping, minus the portal."""
+        self.inj._selection_mark = self.inj.transfers
+        self.inj.transfers += EAGER_PULLS   # the compositor's own pull
 
     def run(self, chord="ctrl-v", escalate=True, delay_ms=60):
         loop = GLib.MainLoop()
@@ -124,3 +137,145 @@ def test_a_failing_chord_stops_the_ladder_and_reports_why():
     assert lad.sent == [LADDER[0]]
     ok, why = lad.done[0]
     assert not ok and "no session" in why
+
+
+def test_escalation_survives_more_than_one_paste():
+    # The transfer counter runs for the life of the process. Judging "did
+    # someone read before the first chord" against its absolute value shut the
+    # ladder off from the second dictation on, and a single rung reports
+    # success whether or not anything pasted.
+    lad = Ladder(receipt_on=LADDER[1])
+    for _ in range(3):
+        lad.take_selection()
+        lad.sent.clear()
+        lad.run()
+        assert lad.sent == list(LADDER[:2]), "the ladder stopped escalating"
+        assert lad.done[-1] == (True, "")
+
+
+def test_abort_stops_the_ladder_and_restores_the_clipboard_at_once():
+    lad = Ladder(receipt_on=None)
+    loop = GLib.MainLoop()
+    lad.inj._start_ladder("ctrl-v", True, 60, lambda ok, why: lad.done.append((ok, why)))
+    # Abort while the first rung is settling; no later rung may be sent.
+    GLib.timeout_add(SETTLE_MS // 2, lambda: (lad.inj.abort(), False)[1])
+    GLib.timeout_add(SETTLE_MS * (len(LADDER) + 1) + 400, lambda: (loop.quit(), False)[1])
+    loop.run()
+    assert lad.sent == [LADDER[0]]
+    assert lad.restored == [b"previous clipboard"]
+    assert lad.done == [], "an aborted ladder must not report a result later"
+
+
+def test_abort_cancels_a_pending_restore_and_restores_now():
+    lad = Ladder(receipt_on=LADDER[0])
+    loop = GLib.MainLoop()
+    lad.inj._start_ladder("ctrl-v", True, 60, lambda ok, why: lad.done.append((ok, why)))
+    # The receipt lands on the first rung; the restore is then scheduled.
+    def abort_then_check():
+        assert lad.inj._restore_timer is not None
+        lad.inj.abort()
+        assert lad.inj._restore_timer is None
+        assert lad.restored == [b"previous clipboard"]
+        return False
+    GLib.timeout_add(SETTLE_MS + 50, abort_then_check)
+    GLib.timeout_add(SETTLE_MS * 3 + 400, lambda: (loop.quit(), False)[1])
+    loop.run()
+    assert lad.restored == [b"previous clipboard"], "restored twice or not at all"
+
+
+def test_abort_while_connecting_settles_the_waiters_and_goes_idle():
+    lad = Ladder()
+    lad.inj.state = InjectorState.CONNECTING
+    lad.inj._saved = None
+    answers = []
+    lad.inj._waiters = [answers.append]
+    lad.inj._on_state_change = None
+    lad.inj.abort()
+    assert answers == [False]
+    assert lad.inj.state is InjectorState.IDLE
+
+
+class Keyboard:
+    """A TextInjector reduced to its key synthesis, with portal calls recorded."""
+
+    def __init__(self, fail_on=None):
+        self.fail_on = fail_on          # keysym whose press raises
+        self.events = []
+        inj = TextInjector.__new__(TextInjector)
+        inj._pressed = []
+        inj._key = self._key
+        self.inj = inj
+
+    def _key(self, keysym, state):
+        if state == 1 and keysym == self.fail_on:
+            raise GLib.Error("session closed")
+        self.events.append((keysym, state))
+
+
+def test_a_chord_that_dies_half_way_releases_what_it_pressed():
+    from portals.inject import CHORDS, PRESSED, RELEASED
+    *mods, final = CHORDS["ctrl-shift-v"]
+    kb = Keyboard(fail_on=final)
+    try:
+        kb.inj.send_chord("ctrl-shift-v")
+    except GLib.Error:
+        pass
+    else:
+        assert False, "the failure was swallowed"
+    presses = [k for k, s in kb.events if s == PRESSED]
+    releases = [k for k, s in kb.events if s == RELEASED]
+    assert presses == mods
+    for m in mods:
+        assert m in releases, "a modifier was left held down"
+    # Most recent first, and the key whose press failed is released too: a
+    # call that timed out after the portal acted would otherwise stick.
+    assert releases == [final] + list(reversed(mods))
+    assert kb.inj._pressed == []
+
+
+def test_a_healthy_chord_releases_everything_exactly_once():
+    from portals.inject import CHORDS, PRESSED, RELEASED
+    kb = Keyboard()
+    kb.inj.send_chord("ctrl-v")
+    *mods, final = CHORDS["ctrl-v"]
+    assert kb.events == (
+        [(m, PRESSED) for m in mods] + [(final, PRESSED), (final, RELEASED)]
+        + [(m, RELEASED) for m in reversed(mods)]
+    )
+    assert kb.inj._pressed == []
+
+
+def test_the_portal_dying_forgets_the_session_without_a_closed_signal():
+    inj = TextInjector.__new__(TextInjector)
+    inj.state = InjectorState.READY
+    inj.session = "/s/1"
+    inj.clipboard_enabled = True
+    inj._pressed = [65507]
+    inj._saved = b"x"
+    inj._waiters = []
+    inj._closed_sub = 5
+    inj._on_state_change = None
+    calls = []
+
+    class P:
+        def unsubscribe(self, sub): calls.append(("unsubscribe", sub))
+        def close_session(self, h): calls.append(("close", h))
+    inj.portal = P()
+    inj._key = lambda *a: calls.append(("key", a))
+
+    inj._on_portal_vanished()
+    assert inj.session is None
+    assert inj.state is InjectorState.IDLE
+    assert not inj.clipboard_enabled
+    assert ("unsubscribe", 5) in calls
+    assert not any(c[0] == "close" for c in calls), "a dead handle must not be closed"
+    assert not any(c[0] == "key" for c in calls), "no key release on a dead session"
+    assert inj._pressed == []
+
+
+def test_the_portal_dying_while_idle_is_a_no_op():
+    inj = TextInjector.__new__(TextInjector)
+    inj.state = InjectorState.IDLE
+    inj.session = None
+    inj._on_portal_vanished()   # must not touch anything else
+    assert inj.session is None

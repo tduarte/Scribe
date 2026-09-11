@@ -44,6 +44,7 @@ class DictationController:
         on_state: Callable[[State, str], None] | None = None,
         on_partial: Callable[[str], None] | None = None,
         on_level: Callable[[float], None] | None = None,
+        focus_is_own_window: Callable[[], bool] | None = None,
     ) -> None:
         self.settings = settings
         self.recorder = recorder
@@ -57,14 +58,21 @@ class DictationController:
         self._on_state = on_state
         self._on_partial = on_partial
         self.on_level = on_level
+        # Answers "is Scribe's own window focused right now?". Pasting into
+        # ourselves has nowhere to land, so the text is copied instead.
+        self._focus_is_own_window = focus_is_own_window
 
         self.state = State.IDLE
         self.last_text: str = ""
         self.last_error: str = ""
         self._partial: list[str] = []
         self._watchdog: int | None = None
+        self._guarding: State | None = None
         self._unload_timer: int | None = None
         self._audio_ms = 0
+        # The model a dictation started with. Resolved once, so switching or
+        # removing models mid-utterance cannot change what transcribes it.
+        self._model = None
 
     # -- state -----------------------------------------------------------
 
@@ -73,6 +81,16 @@ class DictationController:
             return
         self.state = state
         log.debug("state -> %s %s", state.value, detail)
+        if state is State.IDLE:
+            self._disarm_watchdog()
+            # Every way back to idle, including failures and stray presses,
+            # starts the clock on releasing the model.
+            self._schedule_unload()
+        else:
+            # Every busy state gets a deadline. A hung worker, a consent
+            # dialog left open or a portal that never answers must not leave
+            # the shortcut ignored until the app is restarted.
+            self._arm_watchdog(state)
         if self._on_state:
             self._on_state(state, detail)
 
@@ -133,8 +151,8 @@ class DictationController:
             return
 
         self._partial.clear()
+        self._model = model
         self._set_state(State.RECORDING)
-        self._arm_watchdog()
 
         # Load the model while the user is still speaking. It is the same work
         # either way, but done here it happens during the utterance rather than
@@ -169,10 +187,14 @@ class DictationController:
         self.player.play(sounds.STOP)
 
         if len(audio) < 4 * 1600:  # under ~100 ms is a stray keypress, not speech
-            self._set_state(State.IDLE)
+            if self.recorder.last_error:
+                # Not a stray keypress: the microphone died under us.
+                self._fail(self.recorder.last_error)
+            else:
+                self._set_state(State.IDLE)
             return GLib.SOURCE_REMOVE
 
-        model = self.active_model
+        model = self._model
         if model is None:
             self._fail("No speech model is installed yet.")
             return GLib.SOURCE_REMOVE
@@ -198,40 +220,89 @@ class DictationController:
         self._disarm_watchdog()
         if self.state is State.RECORDING:
             self.recorder.cancel()
+        elif self.state is State.TRANSCRIBING:
+            self.transcriber.cancel()
         self._partial.clear()
         self._set_state(State.IDLE, "cancelled")
 
     # -- watchdog --------------------------------------------------------
 
-    def _arm_watchdog(self) -> None:
+    def _watchdog_seconds(self, state: State) -> int:
+        limit = max(5, self.settings.get_int("max-recording-seconds"))
+        if state is State.RECORDING:
+            return limit
+        if state is State.TRANSCRIBING:
+            # A CPU decode of a full-length recording can run slower than
+            # realtime, so scale with the longest recording allowed.
+            return max(30, 3 * limit)
+        return 20  # DELIVERING: a consent dialog or a portal that hangs
+
+    def _arm_watchdog(self, state: State) -> None:
         self._disarm_watchdog()
-        seconds = max(5, self.settings.get_int("max-recording-seconds"))
-        self._watchdog = GLib.timeout_add_seconds(seconds, self._on_watchdog)
+        self._guarding = state
+        self._watchdog = GLib.timeout_add_seconds(
+            self._watchdog_seconds(state), self._on_watchdog
+        )
 
     def _disarm_watchdog(self) -> None:
+        self._guarding = None
         if self._watchdog is not None:
             GLib.source_remove(self._watchdog)
             self._watchdog = None
 
     def _on_watchdog(self) -> bool:
         self._watchdog = None
+        self._guarding = None
         if self.state is State.RECORDING:
             # GNOME never sends a key-up, so a dropped repeat could otherwise
             # leave the microphone open indefinitely. Treat this as a release.
             log.warning("recording hit the safety limit; stopping")
             self.stop_recording()
+        elif self.state is State.TRANSCRIBING:
+            log.warning("transcription hit the safety limit; giving up")
+            self.transcriber.cancel()
+            self._fail("Transcription took too long.")
+        elif self.state is State.DELIVERING:
+            log.warning("delivery hit the safety limit; giving up")
+            self.injector.abort()
+            self._fail("Inserting the text took too long.")
         return GLib.SOURCE_REMOVE
 
     # -- transcription callbacks ----------------------------------------
 
     def on_segment(self, text: str) -> None:
+        if self.state is not State.TRANSCRIBING:
+            return
         self._partial.append(text)
         if self._on_partial:
             self._on_partial("".join(self._partial))
 
     def on_result(self, text: str, language: str, duration_ms: int) -> None:
+        if self.state is not State.TRANSCRIBING:
+            # Nothing is waiting for this: the dictation was cancelled, or it
+            # already failed. Pasting it now would land it in whatever window
+            # the user has moved on to.
+            log.debug("dropping a result that arrived while %s", self.state.value)
+            return
+        try:
+            self._handle_result(text, language, duration_ms)
+        except Exception:
+            # A bug here must not strand the state machine in TRANSCRIBING,
+            # where every shortcut press would be ignored until a restart.
+            log.exception("handling the transcription failed")
+            self._fail("Could not process the transcription.")
+
+    def _handle_result(self, text: str, language: str, duration_ms: int) -> None:
+        # What the text is in, for the filler list: translation makes it
+        # English; otherwise trust what Whisper heard, then the setting.
+        configured = self.settings.get_string("language")
+        if self.settings.get_boolean("translate-to-english"):
+            spoken = "en"
+        else:
+            spoken = language or ("" if configured == "auto" else configured)
         cleaned = postprocess(
             text,
+            language=spoken,
             custom_words=list(self.settings.get_strv("custom-words")),
             word_threshold=self.settings.get_double("word-correction-threshold"),
             remove_filler_words=self.settings.get_boolean("remove-filler-words"),
@@ -243,26 +314,32 @@ class DictationController:
 
         if not cleaned:
             self._set_state(State.IDLE, "nothing was said")
-            self._schedule_unload()
             return
 
         self.last_text = cleaned
         if self.settings.get_boolean("history-enabled"):
-            model = self.active_model
+            model = self._model
             self.history.add(
                 cleaned,
                 duration_ms=self._audio_ms,
                 model=model.id if model else "",
                 language=language,
             )
-            # Enforce on every write, so the database never holds more than the
-            # user asked for even momentarily.
+            # Enforce on every write, so the database never holds more than
+            # the user asked for even momentarily. Age-based retention runs
+            # here too: a session can outlive the retention window.
+            self.history.prune(self.settings.get_int("history-retention-days"))
             self.history.enforce_limit(self.settings.get_int("history-limit"))
 
         self._set_state(State.DELIVERING)
         self._deliver(cleaned)
 
     def on_error(self, message: str) -> None:
+        if self.state in (State.IDLE, State.DELIVERING):
+            # A late complaint from a job that was cancelled or has already
+            # been delivered. There is nothing left to fail.
+            log.debug("ignoring a worker error while %s: %s", self.state.value, message)
+            return
         self._fail(message)
 
     # -- delivery --------------------------------------------------------
@@ -271,12 +348,13 @@ class DictationController:
         mode = self.settings.get_string("output-mode")
 
         def done(ok: bool, error: str) -> None:
+            if self.state is not State.DELIVERING:
+                return  # the watchdog already gave up on this delivery
             if ok:
                 self.player.play(sounds.DONE)
                 self._set_state(State.IDLE, "delivered")
             else:
                 self._fail(error or "Could not insert the text.")
-            self._schedule_unload()
 
         if mode == "clipboard":
             self.injector.copy_only(text, on_done=done)
@@ -285,6 +363,23 @@ class DictationController:
                 self.notifier.notify(
                     "scribe-transcript", "Copied to clipboard", preview
                 )
+            return
+
+        if self._focus_is_own_window and self._focus_is_own_window():
+            # Started from our own window (the record button, or the shortcut
+            # while it is focused). The transcript is already on screen and in
+            # history; a paste ladder aimed at ourselves would only report a
+            # failure. Copy it so the user can paste where they meant to.
+            def copied(ok: bool, error: str) -> None:
+                if self.state is not State.DELIVERING:
+                    return
+                if ok:
+                    self.player.play(sounds.DONE)
+                    self._set_state(State.IDLE, "copied")
+                else:
+                    self._fail(error or "Could not copy the text.")
+
+            self.injector.copy_only(text, on_done=copied)
             return
 
         self.injector.paste(

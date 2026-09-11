@@ -44,6 +44,12 @@ REPEAT_GAP_MS = 120
 # buffer that catches the last syllable.
 INITIAL_GAP_MS = 650
 
+# When the portal closes our session (a portal restart, or the permission being
+# revoked) or refuses to create one, try again after a pause, backing off so a
+# portal that is genuinely gone is not hammered for the rest of the login.
+RETRY_MS = 3_000
+RETRY_MAX_MS = 60_000
+
 
 class HoldDetector:
     """Turns GNOME's `Activated` stream into clean press/release callbacks."""
@@ -143,15 +149,29 @@ class ShortcutManager:
         self.triggers: dict[str, str] = {}
         self._on_error = on_error
         self._subs: list[int] = []
+        self._closed_sub: int | None = None
+        self._owner_watch: int | None = None
+        self._portal_lost = False
+        self._retry: int | None = None
+        self._retry_ms = RETRY_MS
         self.detector = HoldDetector(on_press, on_release)
         self.on_triggers_changed: Callable[[], None] | None = None
 
     def start(self) -> None:
-        self._subs = [
-            self.portal.subscribe_signal(IFACE, "Activated", self._activated),
-            self.portal.subscribe_signal(IFACE, "Deactivated", self._deactivated),
-            self.portal.subscribe_signal(IFACE, "ShortcutsChanged", self._changed),
-        ]
+        if not self._subs:
+            self._subs = [
+                self.portal.subscribe_signal(IFACE, "Activated", self._activated),
+                self.portal.subscribe_signal(IFACE, "Deactivated", self._deactivated),
+                self.portal.subscribe_signal(IFACE, "ShortcutsChanged", self._changed),
+            ]
+        if self._owner_watch is None:
+            self._owner_watch = self.portal.watch_owner(
+                self._on_portal_vanished, self._on_portal_appeared
+            )
+        self._create_session()
+
+    def _create_session(self) -> None:
+        self._cancel_retry()
         self.portal.request_call(
             IFACE, "CreateSession",
             lambda token: GLib.Variant("(a{sv})", ({
@@ -162,13 +182,94 @@ class ShortcutManager:
         )
 
     def stop(self) -> None:
+        self._cancel_retry()
         self.detector.cancel()
         for sub in self._subs:
             self.portal.unsubscribe(sub)
         self._subs.clear()
+        self._unwatch_closed()
+        if self._owner_watch is not None:
+            self.portal.unwatch_owner(self._owner_watch)
+            self._owner_watch = None
         if self.session:
             self.portal.close_session(self.session)
             self.session = None
+
+    # -- recovery --------------------------------------------------------
+
+    def _on_portal_vanished(self) -> None:
+        """The portal service went away, taking our session with it silently."""
+        self._portal_lost = True
+        if self.session is None and self._retry is None:
+            return
+        log.warning("the portal service went away; the global shortcut is lost")
+        self.detector.cancel()
+        self._unwatch_closed()
+        self.session = None          # the handle died with the service
+        self._lose_triggers()
+        self._cancel_retry()         # pointless until the service is back
+
+    def _on_portal_appeared(self) -> None:
+        # The watch reports the current owner once when it is installed,
+        # while our first CreateSession is still in flight; only an owner
+        # that follows a vanish is a restart.
+        if not self._portal_lost:
+            return
+        self._portal_lost = False
+        if self.session is not None:
+            return
+        # A fresh portal after a restart: rebind now rather than on the
+        # next backoff tick. Gets the service a moment to settle first.
+        log.info("the portal service is back; rebinding the global shortcut")
+        self._retry_ms = RETRY_MS
+        self._cancel_retry()
+        self._retry = GLib.timeout_add(1_000, self._on_retry)
+
+    def _on_closed(self) -> None:
+        """The portal closed our session from its side."""
+        log.warning("the global shortcuts session was closed by the portal")
+        self.detector.cancel()
+        self._unwatch_closed()
+        self.session = None
+        self._lose_triggers()
+        self._schedule_retry()
+
+    def _lose_triggers(self) -> None:
+        if self.triggers:
+            self.triggers = {}
+            if self.on_triggers_changed:
+                self.on_triggers_changed()
+
+    def _schedule_retry(self) -> None:
+        self._cancel_retry()
+        log.info("retrying the global shortcuts session in %d s", self._retry_ms // 1000)
+        self._retry = GLib.timeout_add(self._retry_ms, self._on_retry)
+        self._retry_ms = min(self._retry_ms * 2, RETRY_MAX_MS)
+
+    def _cancel_retry(self) -> None:
+        if self._retry is not None:
+            GLib.source_remove(self._retry)
+            self._retry = None
+
+    def _on_retry(self) -> bool:
+        self._retry = None
+        self._create_session()
+        return GLib.SOURCE_REMOVE
+
+    def _unwatch_closed(self) -> None:
+        if self._closed_sub is not None:
+            self.portal.unsubscribe(self._closed_sub)
+            self._closed_sub = None
+
+    def _failed(self, error: PortalError) -> None:
+        self._on_error(error)
+        if error.cancelled:
+            return  # the user said no; asking again would only nag
+        if self.session:
+            self.portal.close_session(self.session)
+            self.session = None
+        self._unwatch_closed()
+        self._schedule_retry()
 
     def configure(self, parent_window: str = "") -> None:
         """Open GNOME's shortcut editor for our existing session.
@@ -190,9 +291,11 @@ class ShortcutManager:
 
     def _created(self, results, error) -> None:
         if error:
-            self._on_error(error)
+            self._failed(error)
             return
         self.session = results["session_handle"]
+        self._unwatch_closed()
+        self._closed_sub = self.portal.watch_session_closed(self.session, self._on_closed)
         # BindShortcuts must be called once per session -- ListShortcuts reports
         # only what the *current* session has bound, so it is always empty here
         # and cannot be used to skip this. GNOME does not re-prompt for
@@ -224,8 +327,9 @@ class ShortcutManager:
 
     def _bound(self, results, error) -> None:
         if error:
-            self._on_error(error)
+            self._failed(error)
             return
+        self._retry_ms = RETRY_MS
         self._record_triggers(results.get("shortcuts", []))
 
     def _record_triggers(self, shortcuts) -> None:

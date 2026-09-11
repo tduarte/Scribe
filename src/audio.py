@@ -1,9 +1,13 @@
 """Microphone capture, using the GStreamer already present in the GNOME runtime.
 
 Whisper wants 16 kHz mono float32; GStreamer's audioconvert/audioresample give us
-exactly that for free, whatever the microphone natively produces. Everything is
-delivered on the GLib main loop via appsink, so there is no audio thread to
-synchronise with.
+exactly that for free, whatever the microphone natively produces.
+
+appsink hands buffers over on its own streaming thread, not on the GLib main
+loop, so that thread does nothing but copy bytes under a lock. Everything the
+rest of the app sees -- the ready cue, the level meter -- is delivered from the
+main loop: the cue through an idle callback, the meter from a timer that samples
+the most recent buffer at a fixed rate.
 
 The pipeline can be left running between utterances ("keep warm"), because
 spinning PipeWire up costs a few hundred milliseconds and that delay would
@@ -15,6 +19,7 @@ from __future__ import annotations
 import array
 import logging
 import math
+import threading
 from typing import Callable
 
 import gi
@@ -30,6 +35,10 @@ CAPS = (
     f"audio/x-raw,format=F32LE,channels={CHANNELS},"
     f"rate={SAMPLE_RATE},layout=interleaved"
 )
+
+# How often the level meter is refreshed. The meter is decoration; it does not
+# need every buffer, and 30 Hz is well above what a level bar can show.
+LEVEL_INTERVAL_MS = 33
 
 _initialised = False
 
@@ -82,13 +91,19 @@ class Recorder:
         # use the latter, or the user speaks into a stream that is not up yet.
         self.on_ready = on_ready
         self.keep_warm_seconds = keep_warm_seconds
+
+        # Everything below the lock is shared with the streaming thread.
+        self._lock = threading.Lock()
+        self._chunks: list[bytes] = []
+        self._capturing = False
         self._ready_fired = False
+        self._latest: bytes | None = None
 
         self._pipeline: Gst.Pipeline | None = None
         self._sink = None
-        self._chunks: list[bytes] = []
-        self._capturing = False
+        self._bus = None
         self._warm_timeout: int | None = None
+        self._level_timeout: int | None = None
         self._device: str = ""
         self.last_error: str | None = None
 
@@ -117,12 +132,19 @@ class Recorder:
                 pipeline.set_state(Gst.State.NULL)
                 log.debug("pipeline %r failed to start", src)
                 continue
+            # A live source answers ASYNC above and only fails once it tries
+            # to open the device. Some of those failures are known already.
+            if pipeline.get_state(0)[0] == Gst.StateChangeReturn.FAILURE:
+                pipeline.set_state(Gst.State.NULL)
+                log.debug("pipeline %r failed while opening the source", src)
+                continue
             self._pipeline = pipeline
             self._sink = pipeline.get_by_name("sink")
             self._sink.connect("new-sample", self._on_sample)
-            bus = pipeline.get_bus()
-            bus.add_signal_watch()
-            bus.connect("message::error", self._on_bus_error)
+            self._bus = pipeline.get_bus()
+            self._bus.add_signal_watch()
+            self._bus.connect("message::error", self._on_bus_error)
+            self._start_level_timer()
             log.info("capturing with %s", src)
             return True
 
@@ -130,27 +152,59 @@ class Recorder:
         log.error(self.last_error)
         return False
 
-    def _teardown(self) -> bool:
+    def _teardown(self) -> None:
+        self._cancel_warm_timer()
+        self._stop_level_timer()
+        if self._bus is not None:
+            self._bus.remove_signal_watch()
+            self._bus = None
         if self._pipeline is not None:
             self._pipeline.set_state(Gst.State.NULL)
             self._pipeline = None
             self._sink = None
-        self._warm_timeout = None
-        return GLib.SOURCE_REMOVE
+        with self._lock:
+            self._latest = None
 
     def _cancel_warm_timer(self) -> None:
         if self._warm_timeout is not None:
             GLib.source_remove(self._warm_timeout)
             self._warm_timeout = None
 
+    def _on_warm_timeout(self) -> bool:
+        # The source is being dispatched, so it must not be removed by hand:
+        # forget its id before tearing down.
+        self._warm_timeout = None
+        self._teardown()
+        return GLib.SOURCE_REMOVE
+
+    def _start_level_timer(self) -> None:
+        if self._level_timeout is None and self._on_level is not None:
+            self._level_timeout = GLib.timeout_add(LEVEL_INTERVAL_MS, self._on_level_tick)
+
+    def _stop_level_timer(self) -> None:
+        if self._level_timeout is not None:
+            GLib.source_remove(self._level_timeout)
+            self._level_timeout = None
+
     # -- callbacks -------------------------------------------------------
 
     def _on_bus_error(self, _bus, message) -> None:
+        """The pipeline is dead: a device that vanished, or access denied.
+
+        Runs on the main loop, through the bus signal watch. Tear the
+        pipeline down rather than keep reusing it for the keep-warm window,
+        and keep whatever audio arrived so a recording that was cut short
+        still transcribes.
+        """
         err, debug = message.parse_error()
         self.last_error = err.message
         log.error("audio pipeline error: %s (%s)", err.message, debug)
+        with self._lock:
+            self._capturing = False
+        self._teardown()
 
     def _on_sample(self, sink) -> int:
+        """Streaming thread: copy the buffer out and nothing else."""
         sample = sink.emit("pull-sample")
         if sample is None:
             return Gst.FlowReturn.OK
@@ -162,16 +216,35 @@ class Recorder:
             data = bytes(info.data)
         finally:
             buf.unmap(info)
-
-        if self._capturing:
-            self._chunks.append(data)
-            if not self._ready_fired:
-                self._ready_fired = True
-                if self.on_ready:
-                    self.on_ready()
-        if self._on_level:
-            self._on_level(_rms(data))
+        self._ingest(data)
         return Gst.FlowReturn.OK
+
+    def _ingest(self, data: bytes) -> None:
+        """Thread-safe core of _on_sample; anything main-loop-only is deferred."""
+        fire_ready = False
+        with self._lock:
+            self._latest = data
+            if self._capturing:
+                self._chunks.append(data)
+                if not self._ready_fired:
+                    self._ready_fired = True
+                    fire_ready = True
+        if fire_ready:
+            GLib.idle_add(self._fire_ready)
+
+    def _fire_ready(self) -> bool:
+        # Main loop. The recording may have ended in the meantime; the cue is
+        # only meaningful while it is still running.
+        if self._capturing and self.on_ready:
+            self.on_ready()
+        return GLib.SOURCE_REMOVE
+
+    def _on_level_tick(self) -> bool:
+        with self._lock:
+            data, self._latest = self._latest, None
+        if data is not None and self._on_level:
+            self._on_level(_rms(data))
+        return GLib.SOURCE_CONTINUE
 
     # -- public API ------------------------------------------------------
 
@@ -181,7 +254,8 @@ class Recorder:
 
     @property
     def duration_ms(self) -> int:
-        frames = sum(len(c) for c in self._chunks) // 4
+        with self._lock:
+            frames = sum(len(c) for c in self._chunks) // 4
         return int(frames * 1000 / SAMPLE_RATE)
 
     def warm_up(self, device: str = "") -> bool:
@@ -194,35 +268,38 @@ class Recorder:
         return self._build(device)
 
     def start(self, device: str = "") -> bool:
+        self.last_error = None
         if not self.warm_up(device):
             return False
-        self._chunks.clear()
-        self._ready_fired = False
-        self._capturing = True
+        with self._lock:
+            self._chunks = []
+            self._ready_fired = False
+            self._capturing = True
         return True
 
     def stop(self) -> bytes:
         """Stop capturing and return the raw float32 PCM."""
-        self._capturing = False
-        data = b"".join(self._chunks)
-        self._chunks.clear()
+        with self._lock:
+            self._capturing = False
+            chunks, self._chunks = self._chunks, []
+        data = b"".join(chunks)
         if self.keep_warm_seconds > 0:
             self._cancel_warm_timer()
             self._warm_timeout = GLib.timeout_add_seconds(
-                self.keep_warm_seconds, self._teardown
+                self.keep_warm_seconds, self._on_warm_timeout
             )
         else:
             self._teardown()
         return data
 
     def cancel(self) -> None:
-        self._capturing = False
-        self._chunks.clear()
+        with self._lock:
+            self._capturing = False
+            self._chunks = []
         if self.keep_warm_seconds <= 0:
             self._teardown()
 
     def shutdown(self) -> None:
-        self._cancel_warm_timer()
         self.cancel()
         self._teardown()
 

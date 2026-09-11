@@ -112,8 +112,11 @@ class ScribeWindow(Adw.ApplicationWindow):
 
     def on_state(self, state: State, detail: str) -> None:
         self.dictate_page.on_state(state, detail)
-        if state is State.IDLE and detail == "delivered":
+        if state is State.IDLE and detail in ("delivered", "copied"):
             self.history_page.reload()
+        if state is State.IDLE and detail == "copied":
+            self.toast("Copied to clipboard")
+            return
         quiet = ("delivered", "cancelled", "nothing was said")
         if detail and state is State.IDLE and detail not in quiet:
             self.toast(detail)

@@ -99,6 +99,164 @@ class TestRecording:
         assert p["transcriber"].requests == []
 
 
+class TestMicrophoneFailure:
+    def test_a_pipeline_that_dies_mid_recording_is_reported(self):
+        ctl, p, _ = build(recorder=FakeRecorder(error_after_start="Device 'hw:2' vanished"))
+        ctl.on_shortcut_press(); ctl.on_shortcut_release()
+        assert ctl.state is State.IDLE
+        assert ctl.last_error == "Device 'hw:2' vanished"
+        assert sounds.ERROR in p["player"].played
+        assert p["notifier"].sent, "the user was not told the microphone failed"
+        assert p["transcriber"].requests == []
+
+    def test_a_genuinely_short_recording_is_still_quiet(self):
+        ctl, p, _ = build(recorder=FakeRecorder(seconds=0.05))
+        ctl.on_shortcut_press(); ctl.on_shortcut_release()
+        assert ctl.state is State.IDLE
+        assert sounds.ERROR not in p["player"].played
+        assert p["notifier"].sent == []
+
+
+class TestCancel:
+    """Cancelling must be final: nothing from that dictation may surface later."""
+
+    def test_cancel_while_transcribing_abandons_the_job(self):
+        ctl, p, _ = build()
+        ctl.on_shortcut_press(); ctl.on_shortcut_release()
+        ctl.cancel()
+        assert ctl.state is State.IDLE
+        assert p["transcriber"].cancelled == 1
+
+    def test_a_result_after_cancel_is_not_pasted(self):
+        ctl, p, _ = build()
+        ctl.on_shortcut_press(); ctl.on_shortcut_release()
+        ctl.cancel()
+        ctl.on_result("too late", "en", 10)
+        assert p["injector"].pasted == []
+        assert p["history"].entries == []
+        assert ctl.state is State.IDLE
+        assert sounds.DONE not in p["player"].played
+
+    def test_a_result_during_the_next_recording_is_ignored(self):
+        # The stale result must not end a recording that is still going on:
+        # the release that follows has to find the state it expects.
+        ctl, p, _ = build()
+        ctl.on_shortcut_press(); ctl.on_shortcut_release()
+        ctl.cancel()
+        ctl.on_shortcut_press()
+        ctl.on_result("too late", "en", 10)
+        assert ctl.state is State.RECORDING
+        assert p["injector"].pasted == []
+        ctl.on_shortcut_release()
+        assert ctl.state is State.TRANSCRIBING
+        assert len(p["transcriber"].requests) == 2
+
+    def test_partials_after_cancel_are_dropped(self):
+        partials = []
+        ctl, p, _ = build(on_partial=partials.append)
+        ctl.on_shortcut_press(); ctl.on_shortcut_release()
+        ctl.cancel()
+        ctl.on_segment("ghost")
+        assert partials == []
+
+    def test_a_late_error_after_cancel_is_ignored(self):
+        ctl, p, _ = build()
+        ctl.on_shortcut_press(); ctl.on_shortcut_release()
+        ctl.cancel()
+        played = list(p["player"].played)
+        ctl.on_error("worker went away")
+        assert p["player"].played == played
+        assert ctl.last_error == ""
+
+    def test_the_model_is_fixed_when_recording_starts(self):
+        # Switching models mid-utterance must not change what transcribes it.
+        settings = FakeSettings()
+        ctl, p, _ = build(settings=settings)
+        ctl.on_shortcut_press()
+        settings.set("active-model", "small")
+        ctl.on_shortcut_release()
+        req = p["transcriber"].requests[0]
+        assert req["model_path"] == "/models/ggml-large-v3-turbo-q5_0.bin"
+        ctl.on_result("hello", "en", 10)
+        assert p["history"].entries[0][2] == "turbo"
+
+
+class TestHistoryRetention:
+    def test_retention_is_applied_on_every_dictation(self):
+        ctl, p, _ = build(settings=FakeSettings(**{"history-retention-days": 7}))
+        ctl.on_shortcut_press(); ctl.on_shortcut_release()
+        ctl.on_result("hello", "en", 10)
+        assert p["history"].pruned == [7]
+        assert p["history"].limits_applied == [5]
+
+
+class TestOwnWindow:
+    def test_dictating_into_our_own_window_copies_instead_of_pasting(self):
+        ctl, p, states = build(focus_is_own_window=lambda: True)
+        details = []
+        ctl._on_state = lambda s, d: (states.append(s), details.append(d))
+        ctl.on_shortcut_press(); ctl.on_shortcut_release()
+        ctl.on_result("hello", "en", 10)
+        assert p["injector"].pasted == []
+        assert p["injector"].copied == ["Hello"]
+        assert ctl.state is State.IDLE
+        assert details[-1] == "copied"
+        assert sounds.DONE in p["player"].played
+        assert sounds.ERROR not in p["player"].played
+        assert p["notifier"].sent == [], "no failure notification for a dictation that worked"
+        assert p["history"].entries[0][0] == "Hello"
+
+    def test_another_window_focused_still_pastes(self):
+        ctl, p, _ = build(focus_is_own_window=lambda: False)
+        ctl.on_shortcut_press(); ctl.on_shortcut_release()
+        ctl.on_result("hello", "en", 10)
+        assert p["injector"].copied == []
+        assert p["injector"].pasted[0]["text"] == "Hello"
+
+    def test_without_the_callback_the_paste_path_is_unchanged(self):
+        ctl, p, _ = build()
+        ctl.on_shortcut_press(); ctl.on_shortcut_release()
+        ctl.on_result("hello", "en", 10)
+        assert p["injector"].pasted[0]["text"] == "Hello"
+
+
+class TestLanguageAwareFillers:
+    def test_whispers_language_decides_the_filler_list(self):
+        ctl, p, _ = build()
+        ctl.on_shortcut_press(); ctl.on_shortcut_release()
+        ctl.on_result("ah, er ist da", "de", 10)
+        assert p["injector"].pasted[0]["text"] == "Ah, er ist da"
+
+    def test_translation_output_is_english(self):
+        ctl, p, _ = build(settings=FakeSettings(**{"translate-to-english": True}))
+        ctl.on_shortcut_press(); ctl.on_shortcut_release()
+        ctl.on_result("er, okay", "de", 10)
+        assert p["injector"].pasted[0]["text"] == "Okay"
+
+    def test_the_configured_language_is_the_fallback(self):
+        ctl, p, _ = build(settings=FakeSettings(language="de"))
+        ctl.on_shortcut_press(); ctl.on_shortcut_release()
+        ctl.on_result("ah, er ist da", "", 10)
+        assert p["injector"].pasted[0]["text"] == "Ah, er ist da"
+
+
+class TestResultHandlerFailure:
+    def test_a_bug_while_handling_the_result_does_not_strand_the_state_machine(self):
+        ctl, p, _ = build()
+
+        def explode(*a, **kw):
+            raise RuntimeError("history is broken")
+
+        p["history"].add = explode
+        ctl.on_shortcut_press(); ctl.on_shortcut_release()
+        ctl.on_result("hello", "en", 10)
+        assert ctl.state is State.IDLE
+        assert sounds.ERROR in p["player"].played
+        # And the next dictation goes through as usual.
+        ctl.on_shortcut_press()
+        assert ctl.state is State.RECORDING
+
+
 class TestToggleMode:
     def test_toggle_starts_then_stops(self):
         ctl, p, _ = build(settings=FakeSettings(**{"activation-mode": "toggle"}))
@@ -252,9 +410,37 @@ class TestResults:
     def test_partial_segments_accumulate(self):
         partials = []
         ctl, p, _ = build(on_partial=partials.append)
+        ctl.on_shortcut_press(); ctl.on_shortcut_release()
         ctl.on_segment("hello ")
         ctl.on_segment("world")
         assert partials == ["hello ", "hello world"]
+
+
+class TestModelUnload:
+    def test_unload_is_scheduled_after_a_stray_keypress(self):
+        ctl, p, _ = build(settings=FakeSettings(**{"model-unload-seconds": 60}),
+                          recorder=FakeRecorder(seconds=0.05))
+        ctl.on_shortcut_press(); ctl.on_shortcut_release()
+        assert ctl._unload_timer is not None
+
+    def test_unload_is_scheduled_after_a_failure(self):
+        ctl, p, _ = build(settings=FakeSettings(**{"model-unload-seconds": 60}))
+        ctl.on_shortcut_press(); ctl.on_shortcut_release()
+        ctl.on_error("boom")
+        assert ctl._unload_timer is not None
+
+    def test_unload_is_scheduled_after_delivery(self):
+        ctl, p, _ = build(settings=FakeSettings(**{"model-unload-seconds": 60}))
+        ctl.on_shortcut_press(); ctl.on_shortcut_release()
+        ctl.on_result("hello", "en", 10)
+        assert ctl._unload_timer is not None
+
+    def test_pressing_again_cancels_the_pending_unload(self):
+        ctl, p, _ = build(settings=FakeSettings(**{"model-unload-seconds": 60}))
+        ctl.on_shortcut_press(); ctl.on_shortcut_release()
+        ctl.on_result("hello", "en", 10)
+        ctl.on_shortcut_press()
+        assert ctl._unload_timer is None
 
 
 class TestWatchdog:
@@ -267,11 +453,56 @@ class TestWatchdog:
         assert ctl.state is State.TRANSCRIBING
         assert len(p["transcriber"].requests) == 1
 
-    def test_watchdog_is_disarmed_on_normal_release(self):
+    def test_release_hands_the_watchdog_to_the_transcription(self):
         ctl, p, _ = build()
         ctl.on_shortcut_press()
+        assert ctl._guarding is State.RECORDING
         ctl.on_shortcut_release()
+        assert ctl._guarding is State.TRANSCRIBING
+        assert ctl._watchdog is not None
+
+    def test_watchdog_gives_up_on_a_hung_transcription(self):
+        ctl, p, _ = build()
+        ctl.on_shortcut_press(); ctl.on_shortcut_release()
+        ctl._on_watchdog()
+        assert ctl.state is State.IDLE
+        assert p["transcriber"].cancelled == 1
+        assert sounds.ERROR in p["player"].played
+        assert "too long" in ctl.last_error
+        # A result that trickles in afterwards is not pasted.
+        ctl.on_result("late", "en", 10)
+        assert p["injector"].pasted == []
+
+    def test_watchdog_gives_up_on_a_hung_delivery(self):
+        ctl, p, _ = build(injector=FakeInjector(hang=True))
+        ctl.on_shortcut_press(); ctl.on_shortcut_release()
+        ctl.on_result("hello", "en", 10)
+        assert ctl.state is State.DELIVERING
+        assert ctl._guarding is State.DELIVERING
+        ctl._on_watchdog()
+        assert ctl.state is State.IDLE
+        assert p["injector"].aborted == 1
+        assert "too long" in ctl.last_error
+        # The portal finally answering must not play the done chime on an
+        # idle controller.
+        played = list(p["player"].played)
+        p["injector"].pending(True, "")
+        assert p["player"].played == played
+        assert ctl.state is State.IDLE
+
+    def test_every_busy_state_has_a_deadline(self):
+        ctl, _, _ = build(settings=FakeSettings(**{"max-recording-seconds": 60}))
+        assert ctl._watchdog_seconds(State.RECORDING) == 60
+        assert ctl._watchdog_seconds(State.TRANSCRIBING) == 180
+        assert ctl._watchdog_seconds(State.DELIVERING) == 20
+
+    def test_the_watchdog_is_gone_once_idle(self):
+        ctl, p, _ = build()
+        ctl.on_shortcut_press(); ctl.on_shortcut_release()
+        ctl.on_result("hello", "en", 10)
+        assert ctl.state is State.IDLE
         assert ctl._watchdog is None
+        assert ctl._guarding is None
 
 
 class TestExtraBuffer:

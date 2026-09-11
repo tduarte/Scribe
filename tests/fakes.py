@@ -32,6 +32,7 @@ class FakeSettings:
         "capitalize-first": True,
         "history-enabled": True,
         "history-limit": 5,
+        "history-retention-days": 0,
     }
 
     def __init__(self, **overrides):
@@ -49,9 +50,12 @@ class FakeSettings:
 
 
 class FakeRecorder:
-    def __init__(self, *, fail=False, seconds=1.0):
+    def __init__(self, *, fail=False, seconds=1.0, error_after_start=""):
         self.fail = fail
         self.seconds = seconds
+        # The pipeline dies once running: nothing is captured and the real
+        # recorder leaves the reason in last_error.
+        self.error_after_start = error_after_start
         self.keep_warm_seconds = 30
         self.started = False
         self.cancelled = 0
@@ -64,6 +68,7 @@ class FakeRecorder:
             self.on_ready()
 
     def start(self, device=""):
+        self.last_error = None
         if self.fail:
             self.last_error = "no microphone"
             return False
@@ -72,6 +77,9 @@ class FakeRecorder:
 
     def stop(self):
         self.started = False
+        if self.error_after_start:
+            self.last_error = self.error_after_start
+            return b""
         frames = int(16000 * self.seconds)
         return b"".join(struct.pack("<f", 0.2) for _ in range(frames))
 
@@ -86,6 +94,7 @@ class FakeTranscriber:
         self.preloads = []
         self.accept = True
         self.unloaded = 0
+        self.cancelled = 0
         # Stands in for the worker failing to start, which the real Transcriber
         # reports synchronously through the controller's on_error.
         self.on_preload = None
@@ -105,38 +114,52 @@ class FakeTranscriber:
     def unload(self):
         self.unloaded += 1
 
+    def cancel(self):
+        self.cancelled += 1
+
 
 class FakeInjector:
-    def __init__(self, *, ok=True, error=""):
+    def __init__(self, *, ok=True, error="", hang=False):
         self.ok, self.error = ok, error
+        self.hang = hang            # never call on_done, like a stuck portal
         self.pasted, self.copied = [], []
+        self.aborted = 0
+        self.pending = None
 
     def paste(self, text, *, chord="ctrl-v", escalate=True,
               restore_clipboard=True, delay_ms=60, on_done=None):
         self.pasted.append({"text": text, "chord": chord,
                             "escalate": escalate,
                             "restore": restore_clipboard})
-        if on_done:
-            on_done(self.ok, self.error)
+        self._answer(on_done)
 
     def copy_only(self, text, on_done=None):
         self.copied.append(text)
-        if on_done:
+        self._answer(on_done)
+
+    def _answer(self, on_done):
+        if self.hang:
+            self.pending = on_done
+        elif on_done:
             on_done(self.ok, self.error)
+
+    def abort(self):
+        self.aborted += 1
 
 
 class FakeModel:
-    id = "turbo"
-    filename = "ggml-large-v3-turbo-q5_0.bin"
+    def __init__(self, id="turbo", filename="ggml-large-v3-turbo-q5_0.bin"):
+        self.id, self.filename = id, filename
 
 
 class FakeModels:
     def __init__(self, downloaded=True):
         self._downloaded = downloaded
         self.model = FakeModel()
+        self.models = {"turbo": self.model, "small": FakeModel("small", "ggml-small.bin")}
 
     def get(self, mid):
-        return self.model if mid == "turbo" else None
+        return self.models.get(mid)
 
     def is_downloaded(self, m):
         return self._downloaded
@@ -152,6 +175,11 @@ class FakeHistory:
     def __init__(self):
         self.entries = []
         self.limits_applied = []
+        self.pruned = []
+
+    def prune(self, retention_days):
+        self.pruned.append(retention_days)
+        return 0
 
     def add(self, text, *, duration_ms=0, model="", language=""):
         self.entries.append((text, duration_ms, model, language))

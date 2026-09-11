@@ -1,5 +1,5 @@
 """A worker that speaks the protocol without needing whisper.cpp."""
-import json, sys
+import json, sys, time
 
 def emit(**kw):
     sys.stdout.write(json.dumps(kw) + "\n"); sys.stdout.flush()
@@ -19,6 +19,8 @@ for line in sys.stdin:
             continue
         if msg.get("crash"):
             sys.exit(9)
+        if msg.get("delay_ms"):
+            time.sleep(msg["delay_ms"] / 1000)
         emit(event="segment", text="hello ")
         emit(event="segment", text="world")
         emit(event="result", text="hello world", language="en", duration_ms=42)
