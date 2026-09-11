@@ -157,6 +157,18 @@ class TestDestructiveLimit:
             with open(wal, "rb") as fh:
                 assert b"PURGEME" not in fh.read(), "purged text survived in the WAL"
 
+    def test_deleting_one_entry_scrubs_it_too(self, hist):
+        # The per-row trash button is the delete path users actually reach.
+        import os
+        eid = hist.add("PURGEME confidential")
+        hist.add("kept")
+        hist.delete(eid)
+        assert hist.count() == 1
+        for path in (hist.path, hist.path + "-wal"):
+            if os.path.exists(path):
+                with open(path, "rb") as fh:
+                    assert b"PURGEME" not in fh.read(), f"deleted text survived in {path}"
+
     def test_lowering_the_limit_later_erases_the_excess(self, hist):
         for i in range(10):
             hist.add(f"entry {i}")

@@ -325,8 +325,10 @@ class DictationController:
                 model=model.id if model else "",
                 language=language,
             )
-            # Enforce on every write, so the database never holds more than the
-            # user asked for even momentarily.
+            # Enforce on every write, so the database never holds more than
+            # the user asked for even momentarily. Age-based retention runs
+            # here too: a session can outlive the retention window.
+            self.history.prune(self.settings.get_int("history-retention-days"))
             self.history.enforce_limit(self.settings.get_int("history-limit"))
 
         self._set_state(State.DELIVERING)

@@ -116,8 +116,10 @@ class History:
         return self._entry(row) if row else None
 
     def delete(self, entry_id: int) -> None:
-        self.db.execute("DELETE FROM transcripts WHERE id = ?", (entry_id,))
+        cur = self.db.execute("DELETE FROM transcripts WHERE id = ?", (entry_id,))
         self.db.commit()
+        if cur.rowcount > 0:
+            self._scrub()
 
     def clear(self) -> None:
         self.db.execute("DELETE FROM transcripts")

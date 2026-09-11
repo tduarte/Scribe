@@ -181,6 +181,15 @@ class TestCancel:
         assert p["history"].entries[0][2] == "turbo"
 
 
+class TestHistoryRetention:
+    def test_retention_is_applied_on_every_dictation(self):
+        ctl, p, _ = build(settings=FakeSettings(**{"history-retention-days": 7}))
+        ctl.on_shortcut_press(); ctl.on_shortcut_release()
+        ctl.on_result("hello", "en", 10)
+        assert p["history"].pruned == [7]
+        assert p["history"].limits_applied == [5]
+
+
 class TestOwnWindow:
     def test_dictating_into_our_own_window_copies_instead_of_pasting(self):
         ctl, p, states = build(focus_is_own_window=lambda: True)

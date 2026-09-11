@@ -32,6 +32,7 @@ class FakeSettings:
         "capitalize-first": True,
         "history-enabled": True,
         "history-limit": 5,
+        "history-retention-days": 0,
     }
 
     def __init__(self, **overrides):
@@ -174,6 +175,11 @@ class FakeHistory:
     def __init__(self):
         self.entries = []
         self.limits_applied = []
+        self.pruned = []
+
+    def prune(self, retention_days):
+        self.pruned.append(retention_days)
+        return 0
 
     def add(self, text, *, duration_ms=0, model="", language=""):
         self.entries.append((text, duration_ms, model, language))
