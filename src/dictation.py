@@ -248,6 +248,15 @@ class DictationController:
             # the user has moved on to.
             log.debug("dropping a result that arrived while %s", self.state.value)
             return
+        try:
+            self._handle_result(text, language, duration_ms)
+        except Exception:
+            # A bug here must not strand the state machine in TRANSCRIBING,
+            # where every shortcut press would be ignored until a restart.
+            log.exception("handling the transcription failed")
+            self._fail("Could not process the transcription.")
+
+    def _handle_result(self, text: str, language: str, duration_ms: int) -> None:
         cleaned = postprocess(
             text,
             custom_words=list(self.settings.get_strv("custom-words")),

@@ -22,14 +22,17 @@ import sys
 import time
 import traceback
 
-# stdout is the protocol channel. whisper.cpp's own logging and pywhispercpp's
-# print_progress both default to writing there, so both are redirected to stderr
-# in Engine.load(); nothing else may print to stdout.
+# stdout is the protocol channel, and only emit() may write to it. main()
+# moves fd 1 to stderr before anything native is imported, so a library that
+# prints to "stdout" (ggml, a driver, a stray print in pywhispercpp) lands in
+# the log rather than glued onto the next protocol line. _protocol is the
+# original fd 1, reopened for emit() alone.
+_protocol = sys.stdout
 
 
 def emit(**payload) -> None:
-    sys.stdout.write(json.dumps(payload, ensure_ascii=False) + "\n")
-    sys.stdout.flush()
+    _protocol.write(json.dumps(payload, ensure_ascii=False) + "\n")
+    _protocol.flush()
 
 
 def log(message: str) -> None:
@@ -168,7 +171,17 @@ class Engine:
         )
 
 
+def _protect_stdout() -> None:
+    """Keep the protocol channel to ourselves; everyone else gets stderr."""
+    global _protocol
+    real = os.dup(1)
+    os.dup2(2, 1)
+    _protocol = os.fdopen(real, "w", encoding="utf-8", buffering=1)
+    sys.stdout = sys.stderr
+
+
 def main() -> int:
+    _protect_stdout()
     engine = Engine()
     emit(event="ready", pid=os.getpid())
 

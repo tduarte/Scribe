@@ -164,3 +164,76 @@ def test_output_from_a_cancelled_worker_is_never_dispatched(h):
     pump(lambda: False, timeout_ms=700)   # long enough for the old one to speak
     assert len(h.results) == 1
     assert h.segments == ["hello ", "world"]
+
+
+def test_a_raising_result_handler_does_not_end_the_protocol(h):
+    calls = []
+
+    def explode(text, lang, ms):
+        calls.append(text)
+        raise RuntimeError("bug in the handler")
+
+    h.t._on_result = explode
+    h.t.start()
+    pump(lambda: "ready" in h.states)
+    h.t.transcribe(AUDIO, model_path="/m.bin")
+    assert pump(lambda: calls)
+    assert not h.t.busy
+    assert not os.path.exists(h.t._audio_path)
+    # The worker is still alive and readable: the next request completes.
+    assert h.t.transcribe(AUDIO, model_path="/m.bin")
+    assert pump(lambda: len(calls) == 2), "the read loop died with the handler"
+
+
+def test_a_raising_segment_handler_fails_the_job_and_keeps_the_worker(h):
+    def explode(text):
+        raise RuntimeError("bug in the handler")
+
+    h.t._on_segment = explode
+    h.t.start()
+    pump(lambda: "ready" in h.states)
+    h.t.transcribe(AUDIO, model_path="/m.bin")
+    assert pump(lambda: h.errors), "the handler's failure was not reported"
+    assert not h.t.busy
+    h.t._on_segment = h.segments.append
+    assert h.t.transcribe(AUDIO, model_path="/m.bin")
+    assert pump(lambda: h.results), "the read loop died with the handler"
+
+
+def test_a_broken_pipe_gives_up_and_respawns_on_the_next_request(h):
+    h.t.start()
+    pump(lambda: "ready" in h.states)
+    h.t.transcribe(AUDIO, model_path="/m.bin", delay_ms=3000)
+    old = h.t._proc
+    # Swap in a stream whose every read fails (a directory cannot be read),
+    # the way a torn-down pipe would, without touching the real one mid-read.
+    from gi.repository import Gio
+    fd = os.open(os.path.dirname(__file__), os.O_RDONLY)
+    h.t._stdout = Gio.DataInputStream.new(Gio.UnixInputStream.new(fd, False))
+    h.t._read_line()
+    assert pump(lambda: h.errors), "losing the pipe was not reported"
+    assert not h.t.busy
+    assert h.t._proc is None
+    assert h.t.transcribe(AUDIO, model_path="/m.bin")
+    assert h.t._proc is not old
+    assert pump(lambda: h.results)
+    os.close(fd)
+
+
+def test_stop_while_busy_kills_the_worker_at_once(h):
+    h.t.start()
+    pump(lambda: "ready" in h.states)
+    h.t.transcribe(AUDIO, model_path="/m.bin", delay_ms=3000)
+    proc = h.t._proc
+    h.t.stop()
+    assert pump(lambda: proc.get_if_exited() or proc.get_if_signaled(), timeout_ms=1000), (
+        "a busy worker was left running after stop()"
+    )
+
+
+def test_a_failed_send_discards_the_staged_audio(h):
+    h.t.start()
+    pump(lambda: "ready" in h.states)
+    h.t._stdin.close(None)
+    assert h.t.transcribe(AUDIO, model_path="/m.bin") is False
+    assert not os.path.exists(h.t._audio_path)

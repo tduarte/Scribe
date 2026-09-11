@@ -160,7 +160,21 @@ class TextInjector:
             cb(ok)
 
     def _fail(self, why: str) -> None:
-        self._set_state(InjectorState.UNAVAILABLE, why)
+        self._drop_session(why, InjectorState.UNAVAILABLE)
+
+    def _drop_session(self, why: str, state=InjectorState.IDLE) -> None:
+        """Forget the session and settle anyone waiting on it with failure.
+
+        IDLE means the next paste quietly creates a fresh session with the
+        stored restore token; UNAVAILABLE means the user has to act first.
+        """
+        if self.session is not None:
+            log.info("dropping the remote desktop session: %s", why)
+            self.portal.close_session(self.session)
+            self.session = None
+        self.clipboard_enabled = False
+        self._saved = None
+        self._set_state(state, why)
         self._settle(False)
 
     def _on_created(self, results, error) -> None:
@@ -307,6 +321,7 @@ class TextInjector:
                 data = src.read_bytes_finish(res).get_data()
             except GLib.Error as exc:
                 log.debug("reading clipboard: %s", exc.message)
+                src.close(None)
                 done(None)
                 return
             if data:
@@ -345,7 +360,17 @@ class TextInjector:
 
             def after_save(saved: bytes | None) -> None:
                 self._saved = saved if restore_clipboard else None
-                self._own_selection(payload)
+                try:
+                    self._own_selection(payload)
+                except GLib.Error as exc:
+                    # The session is gone: the portal restarted, or the user
+                    # revoked us. Report it instead of leaving the caller
+                    # waiting for a chord that will never be sent.
+                    self._saved = None
+                    self._drop_session(exc.message)
+                    if on_done:
+                        on_done(False, f"could not take the clipboard: {exc.message}")
+                    return
                 # Let the compositor register the new owner before the chord.
                 GLib.timeout_add(
                     max(delay_ms, 50),
@@ -422,7 +447,13 @@ class TextInjector:
                 if on_done:
                     on_done(False, "clipboard access was not granted")
                 return
-            self._own_selection(text.encode("utf-8"))
+            try:
+                self._own_selection(text.encode("utf-8"))
+            except GLib.Error as exc:
+                self._drop_session(exc.message)
+                if on_done:
+                    on_done(False, f"could not take the clipboard: {exc.message}")
+                return
             if on_done:
                 on_done(True, "")
 

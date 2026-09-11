@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import traceback
 from typing import Callable
 
 from gi.repository import Gio, GLib
@@ -69,6 +70,7 @@ class Transcriber:
 
         self._stdin = self._proc.get_stdin_pipe()
         self._stdout = Gio.DataInputStream.new(self._proc.get_stdout_pipe())
+        self._read_errors = 0
         self._read_line()
         self._proc.wait_async(None, self._on_exit)
         return True
@@ -82,12 +84,18 @@ class Transcriber:
             pass
         self._discard_audio()
         proc, self._proc = self._proc, None
+        busy, self._busy = self._busy, False
         self._stdin = None
         self._stdout = None
         self._ready = False
-        self._busy = False
         self.loaded_model = None
-        GLib.timeout_add(500, lambda: (proc.force_exit(), GLib.SOURCE_REMOVE)[1])
+        if busy:
+            # Mid-decode the worker will not read the quit for a long time,
+            # and at shutdown the main loop that would run the timeout is
+            # already gone. Kill it now.
+            proc.force_exit()
+        else:
+            GLib.timeout_add(500, lambda: (proc.force_exit(), GLib.SOURCE_REMOVE)[1])
 
     def _on_exit(self, proc, res) -> None:
         try:
@@ -132,8 +140,20 @@ class Transcriber:
             # retrying a genuinely broken pipe would spin the main loop, so
             # give up after a few consecutive failures.
             self._read_errors += 1
-            if stream is self._stdout and self._read_errors <= MAX_READ_ERRORS:
+            if stream is not self._stdout:
+                return
+            if self._read_errors <= MAX_READ_ERRORS:
                 self._read_line()
+                return
+            # The pipe is broken but the process has not exited. Leaving it
+            # would leave every later request refused; drop it so the next
+            # request respawns a fresh one.
+            log.warning("giving up on the transcription worker after %d read errors",
+                        self._read_errors)
+            if self._busy:
+                self._busy = False
+                self._fail("lost contact with the transcription worker")
+            self.stop()
             return
         self._read_errors = 0
         if raw is None or stream is not self._stdout:
@@ -146,8 +166,17 @@ class Transcriber:
             self._read_line()
             return
 
-        self._dispatch(msg)
+        # Re-arm before dispatching: a callback that raises must not end the
+        # protocol stream for the rest of the session.
         self._read_line()
+        try:
+            self._dispatch(msg)
+        except Exception:
+            log.error("worker event handler failed:\n%s", traceback.format_exc())
+            if self._busy:
+                self._busy = False
+                self._discard_audio()
+                self._fail("handling the transcription result failed")
 
     def _dispatch(self, msg: dict) -> None:
         event = msg.get("event")
@@ -255,6 +284,7 @@ class Transcriber:
         try:
             self._send(request)
         except Exception as exc:
+            self._discard_audio()
             self._fail(str(exc))
             return False
         self._busy = True

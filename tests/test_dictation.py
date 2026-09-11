@@ -163,6 +163,23 @@ class TestCancel:
         assert p["history"].entries[0][2] == "turbo"
 
 
+class TestResultHandlerFailure:
+    def test_a_bug_while_handling_the_result_does_not_strand_the_state_machine(self):
+        ctl, p, _ = build()
+
+        def explode(*a, **kw):
+            raise RuntimeError("history is broken")
+
+        p["history"].add = explode
+        ctl.on_shortcut_press(); ctl.on_shortcut_release()
+        ctl.on_result("hello", "en", 10)
+        assert ctl.state is State.IDLE
+        assert sounds.ERROR in p["player"].played
+        # And the next dictation goes through as usual.
+        ctl.on_shortcut_press()
+        assert ctl.state is State.RECORDING
+
+
 class TestToggleMode:
     def test_toggle_starts_then_stops(self):
         ctl, p, _ = build(settings=FakeSettings(**{"activation-mode": "toggle"}))
