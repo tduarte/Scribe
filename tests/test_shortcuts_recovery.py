@@ -28,6 +28,13 @@ class FakePortal:
         self.watched.append((handle, handler))
         return 1000 + len(self.watched)
 
+    def watch_owner(self, on_vanished, on_appeared):
+        self.owner = (on_vanished, on_appeared)
+        return 77
+
+    def unwatch_owner(self, watch_id):
+        self.unwatched_owner = watch_id
+
     def request_call(self, iface, method, build_args, callback):
         self.calls.append((method, callback))
 
@@ -132,3 +139,53 @@ def test_stop_cancels_a_pending_retry():
     assert m._retry is not None
     m.stop()
     assert m._retry is None
+
+
+def test_the_portal_dying_drops_the_session_without_a_closed_signal():
+    m, _, changes = manager()
+    m.start()
+    bring_up(m)
+    vanished, appeared = m.portal.owner
+    appeared()                      # the watch reports the current owner first
+    vanished()                      # systemctl restart: no Closed is sent
+    assert m.session is None
+    assert m.triggers == {}
+    assert changes[-1] == {}
+    assert m._retry is None, "retrying before the service is back is pointless"
+    assert m.portal.closed == [], "a dead handle must not be closed"
+    m.stop()
+
+
+def test_the_portal_coming_back_rebinds_promptly():
+    m, _, _ = manager()
+    m.start()
+    bring_up(m)
+    vanished, appeared = m.portal.owner
+    appeared(); vanished()
+    calls = len(m.portal.calls)
+    appeared()
+    assert m._retry is not None
+    m._on_retry()
+    assert len(m.portal.calls) == calls + 1
+    assert m.portal.calls[-1][0] == "CreateSession"
+    bring_up(m, "/s/2")
+    assert m.session == "/s/2"
+    m.stop()
+
+
+def test_the_initial_owner_report_does_not_recreate_a_live_session():
+    m, _, _ = manager()
+    m.start()
+    bring_up(m)
+    _, appeared = m.portal.owner
+    calls = len(m.portal.calls)
+    appeared()
+    assert m._retry is None
+    assert len(m.portal.calls) == calls
+
+
+def test_stop_releases_the_owner_watch():
+    m, _, _ = manager()
+    m.start()
+    m.stop()
+    assert m.portal.unwatched_owner == 77

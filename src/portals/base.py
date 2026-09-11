@@ -156,6 +156,25 @@ class Portal:
     def unsubscribe(self, subscription_id: int) -> None:
         self.bus.signal_unsubscribe(subscription_id)
 
+    def watch_owner(
+        self, on_vanished: Callable[[], None], on_appeared: Callable[[], None]
+    ) -> int:
+        """Follow the portal service itself coming and going.
+
+        A portal that is restarted or crashes takes every session with it and
+        sends no Closed for any of them; the only sign is its bus name
+        changing hands. ``on_vanished`` fires when the name is dropped,
+        ``on_appeared`` each time an owner is present, including at first.
+        """
+        return Gio.bus_watch_name_on_connection(
+            self.bus, PORTAL_BUS, Gio.BusNameWatcherFlags.NONE,
+            lambda _c, _n, _owner: on_appeared(),
+            lambda _c, _n: on_vanished(),
+        )
+
+    def unwatch_owner(self, watch_id: int) -> None:
+        Gio.bus_unwatch_name(watch_id)
+
     def watch_session_closed(
         self, session_handle: str, handler: Callable[[], None]
     ) -> int:

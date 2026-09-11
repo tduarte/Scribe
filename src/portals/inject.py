@@ -106,6 +106,7 @@ class TextInjector:
         self.session: str | None = None
         self.clipboard_enabled = False
         self._closed_sub: int | None = None
+        self._owner_watch: int | None = None
         # Keysyms currently held down through the portal. Whatever happens,
         # these are released before the session goes away, or the user is
         # left with a stuck Ctrl for the whole desktop.
@@ -131,6 +132,11 @@ class TextInjector:
             PORTAL_BUS, CB, "SelectionTransfer", PORTAL_PATH, None,
             Gio.DBusSignalFlags.NONE,
             lambda _c, _s, _p, _i, _sg, params: self._on_transfer(*params.unpack()),
+        )
+        # A portal that dies sends no Closed; its name vanishing is the only
+        # sign that the session went with it.
+        self._owner_watch = self.portal.watch_owner(
+            self._on_portal_vanished, lambda: None
         )
 
     # -- session ---------------------------------------------------------
@@ -192,9 +198,18 @@ class TextInjector:
         # skip the Close call and just forget it; the next paste recreates the
         # session from the stored restore token, without a new consent dialog.
         log.warning("the remote desktop session was closed by the portal")
-        self._pressed.clear()
+        self._forget_dead_session("session closed by the portal")
+
+    def _on_portal_vanished(self) -> None:
+        if self.session is None and self.state is not InjectorState.CONNECTING:
+            return
+        log.warning("the portal service went away; the remote desktop session is lost")
+        self._forget_dead_session("the portal service went away")
+
+    def _forget_dead_session(self, why: str) -> None:
+        self._pressed.clear()      # nothing to release on a dead session
         self.session = None
-        self._drop_session("session closed by the portal")
+        self._drop_session(why)
 
     def _unwatch_closed(self) -> None:
         if self._closed_sub is not None:
@@ -259,12 +274,17 @@ class TextInjector:
         if not devices & DEVICE_KEYBOARD:
             self._fail("no keyboard device was granted")
             return
+        log.debug("session %s started: devices %d, clipboard %s",
+                  self.session, devices, self.clipboard_enabled)
         self._set_state(InjectorState.READY)
         self._settle(True)
 
     def close(self) -> None:
         self._release_all()
         self._unwatch_closed()
+        if self._owner_watch is not None:
+            self.portal.unwatch_owner(self._owner_watch)
+            self._owner_watch = None
         if self.session:
             self.portal.close_session(self.session)
             self.session = None
@@ -320,8 +340,10 @@ class TextInjector:
 
     def _on_transfer(self, session, mime_type, serial) -> None:
         if session != self.session:
+            log.debug("SelectionTransfer for a session that is not ours: %s", session)
             return
         self.transfers += 1
+        log.debug("SelectionTransfer %s serial %s (transfers now %d)", mime_type, serial, self.transfers)
         try:
             reply, fds = self.portal.bus.call_with_unix_fd_list_sync(
                 PORTAL_BUS, PORTAL_PATH, CB, "SelectionWrite",
@@ -478,6 +500,8 @@ class TextInjector:
         if ladder_id != self._ladder_id:
             return GLib.SOURCE_REMOVE  # aborted while waiting for this rung
         if i and self.transfers > baseline:
+            log.debug("receipt after %s (transfers %d > baseline %d)",
+                      ladder[i - 1], self.transfers, baseline)
             return self._finish(True, "", delay_ms, on_done)
         if i >= len(ladder):
             # Every rung ran and nothing read the clipboard. With a single rung
@@ -487,6 +511,8 @@ class TextInjector:
             return self._finish(
                 ok, "" if ok else "nothing read the clipboard", delay_ms, on_done
             )
+        log.debug("rung %d: sending %s (transfers %d, baseline %d, mark %d)",
+                  i, ladder[i], self.transfers, baseline, self._selection_mark)
         try:
             self.send_chord(ladder[i])
         except GLib.Error as exc:

@@ -150,6 +150,8 @@ class ShortcutManager:
         self._on_error = on_error
         self._subs: list[int] = []
         self._closed_sub: int | None = None
+        self._owner_watch: int | None = None
+        self._portal_present = False
         self._retry: int | None = None
         self._retry_ms = RETRY_MS
         self.detector = HoldDetector(on_press, on_release)
@@ -162,6 +164,10 @@ class ShortcutManager:
                 self.portal.subscribe_signal(IFACE, "Deactivated", self._deactivated),
                 self.portal.subscribe_signal(IFACE, "ShortcutsChanged", self._changed),
             ]
+        if self._owner_watch is None:
+            self._owner_watch = self.portal.watch_owner(
+                self._on_portal_vanished, self._on_portal_appeared
+            )
         self._create_session()
 
     def _create_session(self) -> None:
@@ -182,11 +188,37 @@ class ShortcutManager:
             self.portal.unsubscribe(sub)
         self._subs.clear()
         self._unwatch_closed()
+        if self._owner_watch is not None:
+            self.portal.unwatch_owner(self._owner_watch)
+            self._owner_watch = None
         if self.session:
             self.portal.close_session(self.session)
             self.session = None
 
     # -- recovery --------------------------------------------------------
+
+    def _on_portal_vanished(self) -> None:
+        """The portal service went away, taking our session with it silently."""
+        self._portal_present = False
+        if self.session is None and self._retry is None:
+            return
+        log.warning("the portal service went away; the global shortcut is lost")
+        self.detector.cancel()
+        self._unwatch_closed()
+        self.session = None          # the handle died with the service
+        self._lose_triggers()
+        self._cancel_retry()         # pointless until the service is back
+
+    def _on_portal_appeared(self) -> None:
+        was_present, self._portal_present = self._portal_present, True
+        if was_present or self.session is not None:
+            return
+        # A fresh portal after a restart: rebind now rather than on the
+        # next backoff tick. Gets the service a moment to settle first.
+        log.info("the portal service is back; rebinding the global shortcut")
+        self._retry_ms = RETRY_MS
+        self._cancel_retry()
+        self._retry = GLib.timeout_add(1_000, self._on_retry)
 
     def _on_closed(self) -> None:
         """The portal closed our session from its side."""

@@ -243,3 +243,39 @@ def test_a_healthy_chord_releases_everything_exactly_once():
         + [(m, RELEASED) for m in reversed(mods)]
     )
     assert kb.inj._pressed == []
+
+
+def test_the_portal_dying_forgets_the_session_without_a_closed_signal():
+    inj = TextInjector.__new__(TextInjector)
+    inj.state = InjectorState.READY
+    inj.session = "/s/1"
+    inj.clipboard_enabled = True
+    inj._pressed = [65507]
+    inj._saved = b"x"
+    inj._waiters = []
+    inj._closed_sub = 5
+    inj._on_state_change = None
+    calls = []
+
+    class P:
+        def unsubscribe(self, sub): calls.append(("unsubscribe", sub))
+        def close_session(self, h): calls.append(("close", h))
+    inj.portal = P()
+    inj._key = lambda *a: calls.append(("key", a))
+
+    inj._on_portal_vanished()
+    assert inj.session is None
+    assert inj.state is InjectorState.IDLE
+    assert not inj.clipboard_enabled
+    assert ("unsubscribe", 5) in calls
+    assert not any(c[0] == "close" for c in calls), "a dead handle must not be closed"
+    assert not any(c[0] == "key" for c in calls), "no key release on a dead session"
+    assert inj._pressed == []
+
+
+def test_the_portal_dying_while_idle_is_a_no_op():
+    inj = TextInjector.__new__(TextInjector)
+    inj.state = InjectorState.IDLE
+    inj.session = None
+    inj._on_portal_vanished()   # must not touch anything else
+    assert inj.session is None
