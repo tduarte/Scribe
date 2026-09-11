@@ -189,3 +189,14 @@ def test_stop_releases_the_owner_watch():
     m.start()
     m.stop()
     assert m.portal.unwatched_owner == 77
+
+
+def test_the_initial_owner_report_during_session_creation_is_not_a_restart():
+    m, _, _ = manager()
+    m.start()                       # CreateSession in flight, session None
+    _, appeared = m.portal.owner
+    appeared()
+    assert m._retry is None
+    assert len(m.portal.calls) == 1, "a second session was created at startup"
+    bring_up(m)
+    assert len(m.portal.calls) == 2

@@ -151,7 +151,7 @@ class ShortcutManager:
         self._subs: list[int] = []
         self._closed_sub: int | None = None
         self._owner_watch: int | None = None
-        self._portal_present = False
+        self._portal_lost = False
         self._retry: int | None = None
         self._retry_ms = RETRY_MS
         self.detector = HoldDetector(on_press, on_release)
@@ -199,7 +199,7 @@ class ShortcutManager:
 
     def _on_portal_vanished(self) -> None:
         """The portal service went away, taking our session with it silently."""
-        self._portal_present = False
+        self._portal_lost = True
         if self.session is None and self._retry is None:
             return
         log.warning("the portal service went away; the global shortcut is lost")
@@ -210,8 +210,13 @@ class ShortcutManager:
         self._cancel_retry()         # pointless until the service is back
 
     def _on_portal_appeared(self) -> None:
-        was_present, self._portal_present = self._portal_present, True
-        if was_present or self.session is not None:
+        # The watch reports the current owner once when it is installed,
+        # while our first CreateSession is still in flight; only an owner
+        # that follows a vanish is a restart.
+        if not self._portal_lost:
+            return
+        self._portal_lost = False
+        if self.session is not None:
             return
         # A fresh portal after a restart: rebind now rather than on the
         # next backoff tick. Gets the service a moment to settle first.
