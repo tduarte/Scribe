@@ -118,22 +118,32 @@ class FakeTranscriber:
 
 
 class FakeInjector:
-    def __init__(self, *, ok=True, error=""):
+    def __init__(self, *, ok=True, error="", hang=False):
         self.ok, self.error = ok, error
+        self.hang = hang            # never call on_done, like a stuck portal
         self.pasted, self.copied = [], []
+        self.aborted = 0
+        self.pending = None
 
     def paste(self, text, *, chord="ctrl-v", escalate=True,
               restore_clipboard=True, delay_ms=60, on_done=None):
         self.pasted.append({"text": text, "chord": chord,
                             "escalate": escalate,
                             "restore": restore_clipboard})
-        if on_done:
-            on_done(self.ok, self.error)
+        self._answer(on_done)
 
     def copy_only(self, text, on_done=None):
         self.copied.append(text)
-        if on_done:
+        self._answer(on_done)
+
+    def _answer(self, on_done):
+        if self.hang:
+            self.pending = on_done
+        elif on_done:
             on_done(self.ok, self.error)
+
+    def abort(self):
+        self.aborted += 1
 
 
 class FakeModel:

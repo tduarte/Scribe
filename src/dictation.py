@@ -63,6 +63,7 @@ class DictationController:
         self.last_error: str = ""
         self._partial: list[str] = []
         self._watchdog: int | None = None
+        self._guarding: State | None = None
         self._unload_timer: int | None = None
         self._audio_ms = 0
         # The model a dictation started with. Resolved once, so switching or
@@ -77,9 +78,15 @@ class DictationController:
         self.state = state
         log.debug("state -> %s %s", state.value, detail)
         if state is State.IDLE:
+            self._disarm_watchdog()
             # Every way back to idle, including failures and stray presses,
             # starts the clock on releasing the model.
             self._schedule_unload()
+        else:
+            # Every busy state gets a deadline. A hung worker, a consent
+            # dialog left open or a portal that never answers must not leave
+            # the shortcut ignored until the app is restarted.
+            self._arm_watchdog(state)
         if self._on_state:
             self._on_state(state, detail)
 
@@ -142,7 +149,6 @@ class DictationController:
         self._partial.clear()
         self._model = model
         self._set_state(State.RECORDING)
-        self._arm_watchdog()
 
         # Load the model while the user is still speaking. It is the same work
         # either way, but done here it happens during the utterance rather than
@@ -217,23 +223,45 @@ class DictationController:
 
     # -- watchdog --------------------------------------------------------
 
-    def _arm_watchdog(self) -> None:
+    def _watchdog_seconds(self, state: State) -> int:
+        limit = max(5, self.settings.get_int("max-recording-seconds"))
+        if state is State.RECORDING:
+            return limit
+        if state is State.TRANSCRIBING:
+            # A CPU decode of a full-length recording can run slower than
+            # realtime, so scale with the longest recording allowed.
+            return max(30, 3 * limit)
+        return 20  # DELIVERING: a consent dialog or a portal that hangs
+
+    def _arm_watchdog(self, state: State) -> None:
         self._disarm_watchdog()
-        seconds = max(5, self.settings.get_int("max-recording-seconds"))
-        self._watchdog = GLib.timeout_add_seconds(seconds, self._on_watchdog)
+        self._guarding = state
+        self._watchdog = GLib.timeout_add_seconds(
+            self._watchdog_seconds(state), self._on_watchdog
+        )
 
     def _disarm_watchdog(self) -> None:
+        self._guarding = None
         if self._watchdog is not None:
             GLib.source_remove(self._watchdog)
             self._watchdog = None
 
     def _on_watchdog(self) -> bool:
         self._watchdog = None
+        self._guarding = None
         if self.state is State.RECORDING:
             # GNOME never sends a key-up, so a dropped repeat could otherwise
             # leave the microphone open indefinitely. Treat this as a release.
             log.warning("recording hit the safety limit; stopping")
             self.stop_recording()
+        elif self.state is State.TRANSCRIBING:
+            log.warning("transcription hit the safety limit; giving up")
+            self.transcriber.cancel()
+            self._fail("Transcription took too long.")
+        elif self.state is State.DELIVERING:
+            log.warning("delivery hit the safety limit; giving up")
+            self.injector.abort()
+            self._fail("Inserting the text took too long.")
         return GLib.SOURCE_REMOVE
 
     # -- transcription callbacks ----------------------------------------
@@ -306,6 +334,8 @@ class DictationController:
         mode = self.settings.get_string("output-mode")
 
         def done(ok: bool, error: str) -> None:
+            if self.state is not State.DELIVERING:
+                return  # the watchdog already gave up on this delivery
             if ok:
                 self.player.play(sounds.DONE)
                 self._set_state(State.IDLE, "delivered")

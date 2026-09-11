@@ -394,11 +394,56 @@ class TestWatchdog:
         assert ctl.state is State.TRANSCRIBING
         assert len(p["transcriber"].requests) == 1
 
-    def test_watchdog_is_disarmed_on_normal_release(self):
+    def test_release_hands_the_watchdog_to_the_transcription(self):
         ctl, p, _ = build()
         ctl.on_shortcut_press()
+        assert ctl._guarding is State.RECORDING
         ctl.on_shortcut_release()
+        assert ctl._guarding is State.TRANSCRIBING
+        assert ctl._watchdog is not None
+
+    def test_watchdog_gives_up_on_a_hung_transcription(self):
+        ctl, p, _ = build()
+        ctl.on_shortcut_press(); ctl.on_shortcut_release()
+        ctl._on_watchdog()
+        assert ctl.state is State.IDLE
+        assert p["transcriber"].cancelled == 1
+        assert sounds.ERROR in p["player"].played
+        assert "too long" in ctl.last_error
+        # A result that trickles in afterwards is not pasted.
+        ctl.on_result("late", "en", 10)
+        assert p["injector"].pasted == []
+
+    def test_watchdog_gives_up_on_a_hung_delivery(self):
+        ctl, p, _ = build(injector=FakeInjector(hang=True))
+        ctl.on_shortcut_press(); ctl.on_shortcut_release()
+        ctl.on_result("hello", "en", 10)
+        assert ctl.state is State.DELIVERING
+        assert ctl._guarding is State.DELIVERING
+        ctl._on_watchdog()
+        assert ctl.state is State.IDLE
+        assert p["injector"].aborted == 1
+        assert "too long" in ctl.last_error
+        # The portal finally answering must not play the done chime on an
+        # idle controller.
+        played = list(p["player"].played)
+        p["injector"].pending(True, "")
+        assert p["player"].played == played
+        assert ctl.state is State.IDLE
+
+    def test_every_busy_state_has_a_deadline(self):
+        ctl, _, _ = build(settings=FakeSettings(**{"max-recording-seconds": 60}))
+        assert ctl._watchdog_seconds(State.RECORDING) == 60
+        assert ctl._watchdog_seconds(State.TRANSCRIBING) == 180
+        assert ctl._watchdog_seconds(State.DELIVERING) == 20
+
+    def test_the_watchdog_is_gone_once_idle(self):
+        ctl, p, _ = build()
+        ctl.on_shortcut_press(); ctl.on_shortcut_release()
+        ctl.on_result("hello", "en", 10)
+        assert ctl.state is State.IDLE
         assert ctl._watchdog is None
+        assert ctl._guarding is None
 
 
 class TestExtraBuffer:

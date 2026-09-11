@@ -122,6 +122,9 @@ class TextInjector:
         # because a single paste can trigger several SelectionTransfer calls.
         self._payload: bytes = b""
         self._saved: bytes | None = None
+        self._restore_timer: int | None = None
+        # Bumped by abort(); a ladder whose id no longer matches stops.
+        self._ladder_id = 0
         self._waiters: list[Callable[[bool], None]] = []
 
         self.portal.bus.signal_subscribe(
@@ -435,6 +438,25 @@ class TextInjector:
 
         self.ensure_session(proceed)
 
+    def abort(self) -> None:
+        """Give up on whatever paste is in flight and put the clipboard back.
+
+        The caller has stopped waiting: a consent dialog was left open, or
+        the portal never answered. Pending rungs are dropped, a session still
+        being set up is forgotten, and the saved clipboard goes back now.
+        """
+        self._ladder_id += 1
+        self._release_all()
+        if self.state is InjectorState.CONNECTING:
+            self._set_state(InjectorState.IDLE, "aborted")
+        self._settle(False)
+        if self._restore_timer is not None:
+            GLib.source_remove(self._restore_timer)
+            self._restore_timer = None
+        saved, self._saved = self._saved, None
+        if saved is not None:
+            self._restore(saved)
+
     def _start_ladder(
         self, chord: str, escalate: bool, delay_ms: int, on_done
     ) -> bool:
@@ -447,11 +469,14 @@ class TextInjector:
             # escalating on a meaningless one would paste up to three times.
             log.info("clipboard read before pasting; sending %s alone", chord)
             ladder = [chord]
-        return self._step(ladder, 0, baseline, delay_ms, on_done)
+        return self._step(ladder, 0, baseline, delay_ms, on_done, self._ladder_id)
 
     def _step(
-        self, ladder: list[str], i: int, baseline: int, delay_ms: int, on_done
+        self, ladder: list[str], i: int, baseline: int, delay_ms: int, on_done,
+        ladder_id: int,
     ) -> bool:
+        if ladder_id != self._ladder_id:
+            return GLib.SOURCE_REMOVE  # aborted while waiting for this rung
         if i and self.transfers > baseline:
             return self._finish(True, "", delay_ms, on_done)
         if i >= len(ladder):
@@ -468,26 +493,37 @@ class TextInjector:
             return self._finish(False, exc.message, delay_ms, on_done)
         GLib.timeout_add(
             SETTLE_MS,
-            lambda: self._step(ladder, i + 1, baseline, delay_ms, on_done),
+            lambda: self._step(ladder, i + 1, baseline, delay_ms, on_done, ladder_id),
         )
         return GLib.SOURCE_REMOVE
 
     def _finish(self, ok: bool, why: str, delay_ms: int, on_done) -> bool:
-        saved, self._saved = self._saved, None
-        if saved is not None:
+        if self._saved is not None:
             # Only once the ladder has stopped. Restoring mid-escalation would
-            # leave later rungs pasting the previous clipboard contents.
-            GLib.timeout_add(max(delay_ms * 4, 250), lambda: self._restore(saved))
+            # leave later rungs pasting the previous clipboard contents. The
+            # saved bytes stay on the instance until then, so abort() can
+            # put them back early.
+            if self._restore_timer is not None:
+                GLib.source_remove(self._restore_timer)
+            self._restore_timer = GLib.timeout_add(
+                max(delay_ms * 4, 250), self._on_restore_timer
+            )
         if on_done:
             on_done(ok, why)
         return GLib.SOURCE_REMOVE
 
-    def _restore(self, saved: bytes) -> bool:
+    def _on_restore_timer(self) -> bool:
+        self._restore_timer = None
+        saved, self._saved = self._saved, None
+        if saved is not None:
+            self._restore(saved)
+        return GLib.SOURCE_REMOVE
+
+    def _restore(self, saved: bytes) -> None:
         try:
             self._own_selection(saved)
         except GLib.Error as exc:
             log.debug("restoring clipboard: %s", exc.message)
-        return GLib.SOURCE_REMOVE
 
     def copy_only(
         self, text: str, on_done: Callable[[bool, str], None] | None = None

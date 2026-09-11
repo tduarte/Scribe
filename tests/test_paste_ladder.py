@@ -13,7 +13,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from gi.repository import GLib
 
-from portals.inject import EAGER_PULLS, LADDER, SETTLE_MS, TextInjector
+from portals.inject import (
+    EAGER_PULLS, LADDER, SETTLE_MS, InjectorState, TextInjector,
+)
 
 
 class Ladder:
@@ -30,6 +32,11 @@ class Ladder:
         inj.transfers = baseline
         inj._selection_mark = 0
         inj._saved = b"previous clipboard"
+        inj._restore_timer = None
+        inj._ladder_id = 0
+        inj._pressed = []
+        inj._waiters = []
+        inj.state = InjectorState.READY
         inj.send_chord = self._send
         inj._restore = lambda saved: self.restored.append(saved)
         self.inj = inj
@@ -144,6 +151,48 @@ def test_escalation_survives_more_than_one_paste():
         lad.run()
         assert lad.sent == list(LADDER[:2]), "the ladder stopped escalating"
         assert lad.done[-1] == (True, "")
+
+
+def test_abort_stops_the_ladder_and_restores_the_clipboard_at_once():
+    lad = Ladder(receipt_on=None)
+    loop = GLib.MainLoop()
+    lad.inj._start_ladder("ctrl-v", True, 60, lambda ok, why: lad.done.append((ok, why)))
+    # Abort while the first rung is settling; no later rung may be sent.
+    GLib.timeout_add(SETTLE_MS // 2, lambda: (lad.inj.abort(), False)[1])
+    GLib.timeout_add(SETTLE_MS * (len(LADDER) + 1) + 400, lambda: (loop.quit(), False)[1])
+    loop.run()
+    assert lad.sent == [LADDER[0]]
+    assert lad.restored == [b"previous clipboard"]
+    assert lad.done == [], "an aborted ladder must not report a result later"
+
+
+def test_abort_cancels_a_pending_restore_and_restores_now():
+    lad = Ladder(receipt_on=LADDER[0])
+    loop = GLib.MainLoop()
+    lad.inj._start_ladder("ctrl-v", True, 60, lambda ok, why: lad.done.append((ok, why)))
+    # The receipt lands on the first rung; the restore is then scheduled.
+    def abort_then_check():
+        assert lad.inj._restore_timer is not None
+        lad.inj.abort()
+        assert lad.inj._restore_timer is None
+        assert lad.restored == [b"previous clipboard"]
+        return False
+    GLib.timeout_add(SETTLE_MS + 50, abort_then_check)
+    GLib.timeout_add(SETTLE_MS * 3 + 400, lambda: (loop.quit(), False)[1])
+    loop.run()
+    assert lad.restored == [b"previous clipboard"], "restored twice or not at all"
+
+
+def test_abort_while_connecting_settles_the_waiters_and_goes_idle():
+    lad = Ladder()
+    lad.inj.state = InjectorState.CONNECTING
+    lad.inj._saved = None
+    answers = []
+    lad.inj._waiters = [answers.append]
+    lad.inj._on_state_change = None
+    lad.inj.abort()
+    assert answers == [False]
+    assert lad.inj.state is InjectorState.IDLE
 
 
 class Keyboard:
