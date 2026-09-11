@@ -105,6 +105,11 @@ class TextInjector:
         self.state = InjectorState.IDLE
         self.session: str | None = None
         self.clipboard_enabled = False
+        self._closed_sub: int | None = None
+        # Keysyms currently held down through the portal. Whatever happens,
+        # these are released before the session goes away, or the user is
+        # left with a stuck Ctrl for the whole desktop.
+        self._pressed: list[int] = []
 
         # Bumped on every SelectionTransfer. A transfer means something read the
         # clipboard, which is the only paste receipt available to us. It counts
@@ -168,6 +173,8 @@ class TextInjector:
         IDLE means the next paste quietly creates a fresh session with the
         stored restore token; UNAVAILABLE means the user has to act first.
         """
+        self._release_all()
+        self._unwatch_closed()
         if self.session is not None:
             log.info("dropping the remote desktop session: %s", why)
             self.portal.close_session(self.session)
@@ -177,11 +184,27 @@ class TextInjector:
         self._set_state(state, why)
         self._settle(False)
 
+    def _on_closed(self) -> None:
+        # The portal restarted or the user revoked us. The handle is dead, so
+        # skip the Close call and just forget it; the next paste recreates the
+        # session from the stored restore token, without a new consent dialog.
+        log.warning("the remote desktop session was closed by the portal")
+        self._pressed.clear()
+        self.session = None
+        self._drop_session("session closed by the portal")
+
+    def _unwatch_closed(self) -> None:
+        if self._closed_sub is not None:
+            self.portal.unsubscribe(self._closed_sub)
+            self._closed_sub = None
+
     def _on_created(self, results, error) -> None:
         if error:
             self._fail(str(error))
             return
         self.session = results["session_handle"]
+        self._unwatch_closed()
+        self._closed_sub = self.portal.watch_session_closed(self.session, self._on_closed)
 
         opts = {
             "types": GLib.Variant("u", DEVICE_KEYBOARD),
@@ -237,6 +260,8 @@ class TextInjector:
         self._settle(True)
 
     def close(self) -> None:
+        self._release_all()
+        self._unwatch_closed()
         if self.session:
             self.portal.close_session(self.session)
             self.session = None
@@ -251,16 +276,42 @@ class TextInjector:
             None, Gio.DBusCallFlags.NONE, -1, None,
         )
 
+    def _press(self, keysym: int) -> None:
+        self._pressed.append(keysym)
+        self._key(keysym, PRESSED)
+
+    def _release(self, keysym: int) -> None:
+        if keysym in self._pressed:
+            self._pressed.remove(keysym)
+        self._key(keysym, RELEASED)
+
+    def _release_all(self) -> None:
+        """Let go of anything still held, most recent first, as best we can."""
+        while self._pressed:
+            keysym = self._pressed.pop()
+            try:
+                self._key(keysym, RELEASED)
+            except GLib.Error as exc:
+                log.debug("releasing key %#x: %s", keysym, exc.message)
+
     def send_chord(self, chord: str) -> None:
-        """Press modifiers, tap the final key, release in reverse order."""
+        """Press modifiers, tap the final key, release in reverse order.
+
+        If any step fails, whatever was already pressed is released before
+        the error propagates: a chord that dies half way must not leave the
+        desktop with a modifier held down.
+        """
         keys = CHORDS.get(chord, CHORDS["ctrl-v"])
         *mods, final = keys
-        for m in mods:
-            self._key(m, PRESSED)
-        self._key(final, PRESSED)
-        self._key(final, RELEASED)
-        for m in reversed(mods):
-            self._key(m, RELEASED)
+        try:
+            for m in mods:
+                self._press(m)
+            self._press(final)
+            self._release(final)
+            for m in reversed(mods):
+                self._release(m)
+        finally:
+            self._release_all()
 
     # -- clipboard -------------------------------------------------------
 

@@ -116,6 +116,8 @@ class Portal:
             except GLib.Error as exc:
                 finish(None, PortalError(f"{method}: {exc.message}"))
                 return
+            if state["done"]:
+                return  # the Response beat the reply; nothing left to watch
             actual = reply.unpack()[0]
             if actual != expected:
                 # Older portal implementations may not use the predicted path.
@@ -153,6 +155,21 @@ class Portal:
 
     def unsubscribe(self, subscription_id: int) -> None:
         self.bus.signal_unsubscribe(subscription_id)
+
+    def watch_session_closed(
+        self, session_handle: str, handler: Callable[[], None]
+    ) -> int:
+        """Call ``handler`` when the portal closes this session on its own.
+
+        That happens when the portal service restarts, and when the user
+        revokes the permission in Settings. Nothing else announces it: calls
+        on the dead handle simply fail, and signals simply stop.
+        """
+        return self.bus.signal_subscribe(
+            PORTAL_BUS, SESSION_IFACE, "Closed", session_handle, None,
+            Gio.DBusSignalFlags.NONE,
+            lambda *_: handler(),
+        )
 
     def close_session(self, session_handle: str) -> None:
         try:

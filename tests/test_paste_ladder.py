@@ -144,3 +144,53 @@ def test_escalation_survives_more_than_one_paste():
         lad.run()
         assert lad.sent == list(LADDER[:2]), "the ladder stopped escalating"
         assert lad.done[-1] == (True, "")
+
+
+class Keyboard:
+    """A TextInjector reduced to its key synthesis, with portal calls recorded."""
+
+    def __init__(self, fail_on=None):
+        self.fail_on = fail_on          # keysym whose press raises
+        self.events = []
+        inj = TextInjector.__new__(TextInjector)
+        inj._pressed = []
+        inj._key = self._key
+        self.inj = inj
+
+    def _key(self, keysym, state):
+        if state == 1 and keysym == self.fail_on:
+            raise GLib.Error("session closed")
+        self.events.append((keysym, state))
+
+
+def test_a_chord_that_dies_half_way_releases_what_it_pressed():
+    from portals.inject import CHORDS, PRESSED, RELEASED
+    *mods, final = CHORDS["ctrl-shift-v"]
+    kb = Keyboard(fail_on=final)
+    try:
+        kb.inj.send_chord("ctrl-shift-v")
+    except GLib.Error:
+        pass
+    else:
+        assert False, "the failure was swallowed"
+    presses = [k for k, s in kb.events if s == PRESSED]
+    releases = [k for k, s in kb.events if s == RELEASED]
+    assert presses == mods
+    for m in mods:
+        assert m in releases, "a modifier was left held down"
+    # Most recent first, and the key whose press failed is released too: a
+    # call that timed out after the portal acted would otherwise stick.
+    assert releases == [final] + list(reversed(mods))
+    assert kb.inj._pressed == []
+
+
+def test_a_healthy_chord_releases_everything_exactly_once():
+    from portals.inject import CHORDS, PRESSED, RELEASED
+    kb = Keyboard()
+    kb.inj.send_chord("ctrl-v")
+    *mods, final = CHORDS["ctrl-v"]
+    assert kb.events == (
+        [(m, PRESSED) for m in mods] + [(final, PRESSED), (final, RELEASED)]
+        + [(m, RELEASED) for m in reversed(mods)]
+    )
+    assert kb.inj._pressed == []
