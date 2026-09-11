@@ -136,8 +136,8 @@ class Transcriber:
                 self._read_line()
             return
         self._read_errors = 0
-        if raw is None:
-            return  # pipe closed; _on_exit handles the rest
+        if raw is None or stream is not self._stdout:
+            return  # pipe closed, or a worker that has since been replaced
 
         try:
             msg = json.loads(bytes(raw).decode("utf-8"))
@@ -212,6 +212,17 @@ class Transcriber:
             })
         except Exception as exc:
             self._fail(str(exc))
+
+    def cancel(self) -> None:
+        """Abandon the transcription in flight, if there is one.
+
+        whisper.cpp cannot be interrupted mid-decode through the binding, so
+        the only real cancel is to kill the worker. The next request respawns
+        it, and the preload on the next press hides most of the reload.
+        """
+        if self._busy:
+            log.info("cancelling the transcription in progress")
+            self.stop()
 
     def unload(self) -> None:
         if self._proc is not None and not self._busy:

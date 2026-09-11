@@ -137,3 +137,30 @@ def test_staged_audio_is_deleted_even_when_transcription_fails(h):
     assert not os.path.exists(h.t._audio_path), (
         "the staged recording survived a failed transcription"
     )
+
+
+def test_cancel_abandons_the_job_and_the_next_request_still_works(h):
+    h.t.start()
+    pump(lambda: "ready" in h.states)
+    h.t.transcribe(AUDIO, model_path="/m.bin", delay_ms=3000)
+    assert h.t.busy
+    h.t.cancel()
+    assert not h.t.busy
+    assert h.t.transcribe(AUDIO, model_path="/m.bin")
+    assert pump(lambda: h.results), "worker was not respawned after a cancel"
+    assert h.results == [("hello world", "en", 42)]
+    assert h.errors == [], "a cancel must not be reported as a failure"
+
+
+def test_output_from_a_cancelled_worker_is_never_dispatched(h):
+    # The old worker may still get its result out before it is killed; that
+    # line belongs to a stream we have abandoned.
+    h.t.start()
+    pump(lambda: "ready" in h.states)
+    h.t.transcribe(AUDIO, model_path="/m.bin", delay_ms=200)
+    h.t.cancel()
+    h.t.transcribe(AUDIO, model_path="/m.bin")
+    assert pump(lambda: h.results)
+    pump(lambda: False, timeout_ms=700)   # long enough for the old one to speak
+    assert len(h.results) == 1
+    assert h.segments == ["hello ", "world"]

@@ -65,6 +65,9 @@ class DictationController:
         self._watchdog: int | None = None
         self._unload_timer: int | None = None
         self._audio_ms = 0
+        # The model a dictation started with. Resolved once, so switching or
+        # removing models mid-utterance cannot change what transcribes it.
+        self._model = None
 
     # -- state -----------------------------------------------------------
 
@@ -73,6 +76,10 @@ class DictationController:
             return
         self.state = state
         log.debug("state -> %s %s", state.value, detail)
+        if state is State.IDLE:
+            # Every way back to idle, including failures and stray presses,
+            # starts the clock on releasing the model.
+            self._schedule_unload()
         if self._on_state:
             self._on_state(state, detail)
 
@@ -133,6 +140,7 @@ class DictationController:
             return
 
         self._partial.clear()
+        self._model = model
         self._set_state(State.RECORDING)
         self._arm_watchdog()
 
@@ -172,7 +180,7 @@ class DictationController:
             self._set_state(State.IDLE)
             return GLib.SOURCE_REMOVE
 
-        model = self.active_model
+        model = self._model
         if model is None:
             self._fail("No speech model is installed yet.")
             return GLib.SOURCE_REMOVE
@@ -198,6 +206,8 @@ class DictationController:
         self._disarm_watchdog()
         if self.state is State.RECORDING:
             self.recorder.cancel()
+        elif self.state is State.TRANSCRIBING:
+            self.transcriber.cancel()
         self._partial.clear()
         self._set_state(State.IDLE, "cancelled")
 
@@ -225,11 +235,19 @@ class DictationController:
     # -- transcription callbacks ----------------------------------------
 
     def on_segment(self, text: str) -> None:
+        if self.state is not State.TRANSCRIBING:
+            return
         self._partial.append(text)
         if self._on_partial:
             self._on_partial("".join(self._partial))
 
     def on_result(self, text: str, language: str, duration_ms: int) -> None:
+        if self.state is not State.TRANSCRIBING:
+            # Nothing is waiting for this: the dictation was cancelled, or it
+            # already failed. Pasting it now would land it in whatever window
+            # the user has moved on to.
+            log.debug("dropping a result that arrived while %s", self.state.value)
+            return
         cleaned = postprocess(
             text,
             custom_words=list(self.settings.get_strv("custom-words")),
@@ -243,12 +261,11 @@ class DictationController:
 
         if not cleaned:
             self._set_state(State.IDLE, "nothing was said")
-            self._schedule_unload()
             return
 
         self.last_text = cleaned
         if self.settings.get_boolean("history-enabled"):
-            model = self.active_model
+            model = self._model
             self.history.add(
                 cleaned,
                 duration_ms=self._audio_ms,
@@ -263,6 +280,11 @@ class DictationController:
         self._deliver(cleaned)
 
     def on_error(self, message: str) -> None:
+        if self.state in (State.IDLE, State.DELIVERING):
+            # A late complaint from a job that was cancelled or has already
+            # been delivered. There is nothing left to fail.
+            log.debug("ignoring a worker error while %s: %s", self.state.value, message)
+            return
         self._fail(message)
 
     # -- delivery --------------------------------------------------------
@@ -276,7 +298,6 @@ class DictationController:
                 self._set_state(State.IDLE, "delivered")
             else:
                 self._fail(error or "Could not insert the text.")
-            self._schedule_unload()
 
         if mode == "clipboard":
             self.injector.copy_only(text, on_done=done)

@@ -99,6 +99,70 @@ class TestRecording:
         assert p["transcriber"].requests == []
 
 
+class TestCancel:
+    """Cancelling must be final: nothing from that dictation may surface later."""
+
+    def test_cancel_while_transcribing_abandons_the_job(self):
+        ctl, p, _ = build()
+        ctl.on_shortcut_press(); ctl.on_shortcut_release()
+        ctl.cancel()
+        assert ctl.state is State.IDLE
+        assert p["transcriber"].cancelled == 1
+
+    def test_a_result_after_cancel_is_not_pasted(self):
+        ctl, p, _ = build()
+        ctl.on_shortcut_press(); ctl.on_shortcut_release()
+        ctl.cancel()
+        ctl.on_result("too late", "en", 10)
+        assert p["injector"].pasted == []
+        assert p["history"].entries == []
+        assert ctl.state is State.IDLE
+        assert sounds.DONE not in p["player"].played
+
+    def test_a_result_during_the_next_recording_is_ignored(self):
+        # The stale result must not end a recording that is still going on:
+        # the release that follows has to find the state it expects.
+        ctl, p, _ = build()
+        ctl.on_shortcut_press(); ctl.on_shortcut_release()
+        ctl.cancel()
+        ctl.on_shortcut_press()
+        ctl.on_result("too late", "en", 10)
+        assert ctl.state is State.RECORDING
+        assert p["injector"].pasted == []
+        ctl.on_shortcut_release()
+        assert ctl.state is State.TRANSCRIBING
+        assert len(p["transcriber"].requests) == 2
+
+    def test_partials_after_cancel_are_dropped(self):
+        partials = []
+        ctl, p, _ = build(on_partial=partials.append)
+        ctl.on_shortcut_press(); ctl.on_shortcut_release()
+        ctl.cancel()
+        ctl.on_segment("ghost")
+        assert partials == []
+
+    def test_a_late_error_after_cancel_is_ignored(self):
+        ctl, p, _ = build()
+        ctl.on_shortcut_press(); ctl.on_shortcut_release()
+        ctl.cancel()
+        played = list(p["player"].played)
+        ctl.on_error("worker went away")
+        assert p["player"].played == played
+        assert ctl.last_error == ""
+
+    def test_the_model_is_fixed_when_recording_starts(self):
+        # Switching models mid-utterance must not change what transcribes it.
+        settings = FakeSettings()
+        ctl, p, _ = build(settings=settings)
+        ctl.on_shortcut_press()
+        settings.set("active-model", "small")
+        ctl.on_shortcut_release()
+        req = p["transcriber"].requests[0]
+        assert req["model_path"] == "/models/ggml-large-v3-turbo-q5_0.bin"
+        ctl.on_result("hello", "en", 10)
+        assert p["history"].entries[0][2] == "turbo"
+
+
 class TestToggleMode:
     def test_toggle_starts_then_stops(self):
         ctl, p, _ = build(settings=FakeSettings(**{"activation-mode": "toggle"}))
@@ -252,9 +316,37 @@ class TestResults:
     def test_partial_segments_accumulate(self):
         partials = []
         ctl, p, _ = build(on_partial=partials.append)
+        ctl.on_shortcut_press(); ctl.on_shortcut_release()
         ctl.on_segment("hello ")
         ctl.on_segment("world")
         assert partials == ["hello ", "hello world"]
+
+
+class TestModelUnload:
+    def test_unload_is_scheduled_after_a_stray_keypress(self):
+        ctl, p, _ = build(settings=FakeSettings(**{"model-unload-seconds": 60}),
+                          recorder=FakeRecorder(seconds=0.05))
+        ctl.on_shortcut_press(); ctl.on_shortcut_release()
+        assert ctl._unload_timer is not None
+
+    def test_unload_is_scheduled_after_a_failure(self):
+        ctl, p, _ = build(settings=FakeSettings(**{"model-unload-seconds": 60}))
+        ctl.on_shortcut_press(); ctl.on_shortcut_release()
+        ctl.on_error("boom")
+        assert ctl._unload_timer is not None
+
+    def test_unload_is_scheduled_after_delivery(self):
+        ctl, p, _ = build(settings=FakeSettings(**{"model-unload-seconds": 60}))
+        ctl.on_shortcut_press(); ctl.on_shortcut_release()
+        ctl.on_result("hello", "en", 10)
+        assert ctl._unload_timer is not None
+
+    def test_pressing_again_cancels_the_pending_unload(self):
+        ctl, p, _ = build(settings=FakeSettings(**{"model-unload-seconds": 60}))
+        ctl.on_shortcut_press(); ctl.on_shortcut_release()
+        ctl.on_result("hello", "en", 10)
+        ctl.on_shortcut_press()
+        assert ctl._unload_timer is None
 
 
 class TestWatchdog:

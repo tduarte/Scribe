@@ -86,6 +86,7 @@ class FakeTranscriber:
         self.preloads = []
         self.accept = True
         self.unloaded = 0
+        self.cancelled = 0
         # Stands in for the worker failing to start, which the real Transcriber
         # reports synchronously through the controller's on_error.
         self.on_preload = None
@@ -104,6 +105,9 @@ class FakeTranscriber:
 
     def unload(self):
         self.unloaded += 1
+
+    def cancel(self):
+        self.cancelled += 1
 
 
 class FakeInjector:
@@ -126,17 +130,18 @@ class FakeInjector:
 
 
 class FakeModel:
-    id = "turbo"
-    filename = "ggml-large-v3-turbo-q5_0.bin"
+    def __init__(self, id="turbo", filename="ggml-large-v3-turbo-q5_0.bin"):
+        self.id, self.filename = id, filename
 
 
 class FakeModels:
     def __init__(self, downloaded=True):
         self._downloaded = downloaded
         self.model = FakeModel()
+        self.models = {"turbo": self.model, "small": FakeModel("small", "ggml-small.bin")}
 
     def get(self, mid):
-        return self.model if mid == "turbo" else None
+        return self.models.get(mid)
 
     def is_downloaded(self, m):
         return self._downloaded
