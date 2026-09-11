@@ -119,3 +119,59 @@ def test_buffers_land_in_the_recording_they_belong_to():
     rec._ingest(b"C" * 8)
     second = rec.stop()
     assert (first, second) == (b"A" * 8, b"C" * 8)
+
+
+# -- pipeline errors ---------------------------------------------------------
+
+
+class FakeMessage:
+    def __init__(self, text):
+        self.text = text
+
+    def parse_error(self):
+        class Err:
+            message = self.text
+        return Err(), "debug details"
+
+
+class FakePipeline:
+    def __init__(self):
+        self.states = []
+
+    def set_state(self, state):
+        self.states.append(state)
+
+
+class FakeBus:
+    def __init__(self):
+        self.removed = 0
+
+    def remove_signal_watch(self):
+        self.removed += 1
+
+
+def test_a_bus_error_tears_the_pipeline_down_and_keeps_the_audio():
+    from gi.repository import Gst
+    rec = Recorder()
+    rec._pipeline, rec._bus = FakePipeline(), FakeBus()
+    pipeline, bus = rec._pipeline, rec._bus
+    with rec._lock:
+        rec._capturing = True
+    rec._ingest(pcm([0.2] * 64))
+
+    rec._on_bus_error(bus, FakeMessage("Could not open audio device"))
+
+    assert rec.last_error == "Could not open audio device"
+    assert rec._pipeline is None, "the dead pipeline was kept for reuse"
+    assert pipeline.states == [Gst.State.NULL]
+    assert bus.removed == 1
+    assert not rec._capturing
+    assert rec.stop() == pcm([0.2] * 64), "audio captured before the error was lost"
+
+
+def test_starting_a_recording_forgets_the_previous_error():
+    rec = Recorder()
+    rec.last_error = "old news"
+    rec.warm_up = lambda device="": True
+    assert rec.start()
+    assert rec.last_error is None

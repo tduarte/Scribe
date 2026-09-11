@@ -49,9 +49,12 @@ class FakeSettings:
 
 
 class FakeRecorder:
-    def __init__(self, *, fail=False, seconds=1.0):
+    def __init__(self, *, fail=False, seconds=1.0, error_after_start=""):
         self.fail = fail
         self.seconds = seconds
+        # The pipeline dies once running: nothing is captured and the real
+        # recorder leaves the reason in last_error.
+        self.error_after_start = error_after_start
         self.keep_warm_seconds = 30
         self.started = False
         self.cancelled = 0
@@ -64,6 +67,7 @@ class FakeRecorder:
             self.on_ready()
 
     def start(self, device=""):
+        self.last_error = None
         if self.fail:
             self.last_error = "no microphone"
             return False
@@ -72,6 +76,9 @@ class FakeRecorder:
 
     def stop(self):
         self.started = False
+        if self.error_after_start:
+            self.last_error = self.error_after_start
+            return b""
         frames = int(16000 * self.seconds)
         return b"".join(struct.pack("<f", 0.2) for _ in range(frames))
 

@@ -99,6 +99,24 @@ class TestRecording:
         assert p["transcriber"].requests == []
 
 
+class TestMicrophoneFailure:
+    def test_a_pipeline_that_dies_mid_recording_is_reported(self):
+        ctl, p, _ = build(recorder=FakeRecorder(error_after_start="Device 'hw:2' vanished"))
+        ctl.on_shortcut_press(); ctl.on_shortcut_release()
+        assert ctl.state is State.IDLE
+        assert ctl.last_error == "Device 'hw:2' vanished"
+        assert sounds.ERROR in p["player"].played
+        assert p["notifier"].sent, "the user was not told the microphone failed"
+        assert p["transcriber"].requests == []
+
+    def test_a_genuinely_short_recording_is_still_quiet(self):
+        ctl, p, _ = build(recorder=FakeRecorder(seconds=0.05))
+        ctl.on_shortcut_press(); ctl.on_shortcut_release()
+        assert ctl.state is State.IDLE
+        assert sounds.ERROR not in p["player"].played
+        assert p["notifier"].sent == []
+
+
 class TestCancel:
     """Cancelling must be final: nothing from that dictation may surface later."""
 

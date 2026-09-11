@@ -132,6 +132,12 @@ class Recorder:
                 pipeline.set_state(Gst.State.NULL)
                 log.debug("pipeline %r failed to start", src)
                 continue
+            # A live source answers ASYNC above and only fails once it tries
+            # to open the device. Some of those failures are known already.
+            if pipeline.get_state(0)[0] == Gst.StateChangeReturn.FAILURE:
+                pipeline.set_state(Gst.State.NULL)
+                log.debug("pipeline %r failed while opening the source", src)
+                continue
             self._pipeline = pipeline
             self._sink = pipeline.get_by_name("sink")
             self._sink.connect("new-sample", self._on_sample)
@@ -183,9 +189,19 @@ class Recorder:
     # -- callbacks -------------------------------------------------------
 
     def _on_bus_error(self, _bus, message) -> None:
+        """The pipeline is dead: a device that vanished, or access denied.
+
+        Runs on the main loop, through the bus signal watch. Tear the
+        pipeline down rather than keep reusing it for the keep-warm window,
+        and keep whatever audio arrived so a recording that was cut short
+        still transcribes.
+        """
         err, debug = message.parse_error()
         self.last_error = err.message
         log.error("audio pipeline error: %s (%s)", err.message, debug)
+        with self._lock:
+            self._capturing = False
+        self._teardown()
 
     def _on_sample(self, sink) -> int:
         """Streaming thread: copy the buffer out and nothing else."""
@@ -252,6 +268,7 @@ class Recorder:
         return self._build(device)
 
     def start(self, device: str = "") -> bool:
+        self.last_error = None
         if not self.warm_up(device):
             return False
         with self._lock:

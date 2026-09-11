@@ -177,7 +177,11 @@ class DictationController:
         self.player.play(sounds.STOP)
 
         if len(audio) < 4 * 1600:  # under ~100 ms is a stray keypress, not speech
-            self._set_state(State.IDLE)
+            if self.recorder.last_error:
+                # Not a stray keypress: the microphone died under us.
+                self._fail(self.recorder.last_error)
+            else:
+                self._set_state(State.IDLE)
             return GLib.SOURCE_REMOVE
 
         model = self._model
