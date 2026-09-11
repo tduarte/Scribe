@@ -107,8 +107,11 @@ class TextInjector:
         self.clipboard_enabled = False
 
         # Bumped on every SelectionTransfer. A transfer means something read the
-        # clipboard, which is the only paste receipt available to us.
+        # clipboard, which is the only paste receipt available to us. It counts
+        # for the life of the process; anything that reasons about "reads since
+        # we took the selection" must subtract _selection_mark.
         self.transfers = 0
+        self._selection_mark = 0
 
         # Served to the compositor on demand; kept until the selection changes,
         # because a single paste can trigger several SelectionTransfer calls.
@@ -274,6 +277,7 @@ class TextInjector:
 
     def _own_selection(self, data: bytes) -> None:
         self._payload = data
+        self._selection_mark = self.transfers
         self.portal.call_noreply(
             CB, "SetSelection",
             GLib.Variant("(oa{sv})", (self.session, {
@@ -360,11 +364,11 @@ class TextInjector:
     ) -> bool:
         baseline = self.transfers
         ladder = list(LADDER) if escalate else [chord]
-        if escalate and baseline > EAGER_PULLS:
-            # More reads than the compositor's own before any chord was sent, so
-            # a clipboard manager is taking every selection. A receipt no longer
-            # means an application pasted, and escalating on a meaningless one
-            # would paste up to three times.
+        if escalate and baseline - self._selection_mark > EAGER_PULLS:
+            # More reads since SetSelection than the compositor's own, before
+            # any chord was sent, so a clipboard manager is taking every
+            # selection. A receipt no longer means an application pasted, and
+            # escalating on a meaningless one would paste up to three times.
             log.info("clipboard read before pasting; sending %s alone", chord)
             ladder = [chord]
         return self._step(ladder, 0, baseline, delay_ms, on_done)

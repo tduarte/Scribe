@@ -28,6 +28,7 @@ class Ladder:
 
         inj = TextInjector.__new__(TextInjector)
         inj.transfers = baseline
+        inj._selection_mark = 0
         inj._saved = b"previous clipboard"
         inj.send_chord = self._send
         inj._restore = lambda saved: self.restored.append(saved)
@@ -37,6 +38,11 @@ class Ladder:
         self.sent.append(chord)
         if chord == self.receipt_on:
             self.inj.transfers += 1
+
+    def take_selection(self):
+        """What _own_selection does to the bookkeeping, minus the portal."""
+        self.inj._selection_mark = self.inj.transfers
+        self.inj.transfers += EAGER_PULLS   # the compositor's own pull
 
     def run(self, chord="ctrl-v", escalate=True, delay_ms=60):
         loop = GLib.MainLoop()
@@ -124,3 +130,17 @@ def test_a_failing_chord_stops_the_ladder_and_reports_why():
     assert lad.sent == [LADDER[0]]
     ok, why = lad.done[0]
     assert not ok and "no session" in why
+
+
+def test_escalation_survives_more_than_one_paste():
+    # The transfer counter runs for the life of the process. Judging "did
+    # someone read before the first chord" against its absolute value shut the
+    # ladder off from the second dictation on, and a single rung reports
+    # success whether or not anything pasted.
+    lad = Ladder(receipt_on=LADDER[1])
+    for _ in range(3):
+        lad.take_selection()
+        lad.sent.clear()
+        lad.run()
+        assert lad.sent == list(LADDER[:2]), "the ladder stopped escalating"
+        assert lad.done[-1] == (True, "")
