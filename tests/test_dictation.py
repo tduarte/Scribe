@@ -181,6 +181,36 @@ class TestCancel:
         assert p["history"].entries[0][2] == "turbo"
 
 
+class TestOwnWindow:
+    def test_dictating_into_our_own_window_copies_instead_of_pasting(self):
+        ctl, p, states = build(focus_is_own_window=lambda: True)
+        details = []
+        ctl._on_state = lambda s, d: (states.append(s), details.append(d))
+        ctl.on_shortcut_press(); ctl.on_shortcut_release()
+        ctl.on_result("hello", "en", 10)
+        assert p["injector"].pasted == []
+        assert p["injector"].copied == ["Hello"]
+        assert ctl.state is State.IDLE
+        assert details[-1] == "copied"
+        assert sounds.DONE in p["player"].played
+        assert sounds.ERROR not in p["player"].played
+        assert p["notifier"].sent == [], "no failure notification for a dictation that worked"
+        assert p["history"].entries[0][0] == "Hello"
+
+    def test_another_window_focused_still_pastes(self):
+        ctl, p, _ = build(focus_is_own_window=lambda: False)
+        ctl.on_shortcut_press(); ctl.on_shortcut_release()
+        ctl.on_result("hello", "en", 10)
+        assert p["injector"].copied == []
+        assert p["injector"].pasted[0]["text"] == "Hello"
+
+    def test_without_the_callback_the_paste_path_is_unchanged(self):
+        ctl, p, _ = build()
+        ctl.on_shortcut_press(); ctl.on_shortcut_release()
+        ctl.on_result("hello", "en", 10)
+        assert p["injector"].pasted[0]["text"] == "Hello"
+
+
 class TestLanguageAwareFillers:
     def test_whispers_language_decides_the_filler_list(self):
         ctl, p, _ = build()

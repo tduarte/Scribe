@@ -44,6 +44,7 @@ class DictationController:
         on_state: Callable[[State, str], None] | None = None,
         on_partial: Callable[[str], None] | None = None,
         on_level: Callable[[float], None] | None = None,
+        focus_is_own_window: Callable[[], bool] | None = None,
     ) -> None:
         self.settings = settings
         self.recorder = recorder
@@ -57,6 +58,9 @@ class DictationController:
         self._on_state = on_state
         self._on_partial = on_partial
         self.on_level = on_level
+        # Answers "is Scribe's own window focused right now?". Pasting into
+        # ourselves has nowhere to land, so the text is copied instead.
+        self._focus_is_own_window = focus_is_own_window
 
         self.state = State.IDLE
         self.last_text: str = ""
@@ -357,6 +361,23 @@ class DictationController:
                 self.notifier.notify(
                     "scribe-transcript", "Copied to clipboard", preview
                 )
+            return
+
+        if self._focus_is_own_window and self._focus_is_own_window():
+            # Started from our own window (the record button, or the shortcut
+            # while it is focused). The transcript is already on screen and in
+            # history; a paste ladder aimed at ourselves would only report a
+            # failure. Copy it so the user can paste where they meant to.
+            def copied(ok: bool, error: str) -> None:
+                if self.state is not State.DELIVERING:
+                    return
+                if ok:
+                    self.player.play(sounds.DONE)
+                    self._set_state(State.IDLE, "copied")
+                else:
+                    self._fail(error or "Could not copy the text.")
+
+            self.injector.copy_only(text, on_done=copied)
             return
 
         self.injector.paste(

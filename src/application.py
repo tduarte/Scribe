@@ -199,6 +199,7 @@ class ScribeApplication(Adw.Application):
             notifier=self.notifier,
             on_state=self._on_state,
             on_partial=self._on_partial,
+            focus_is_own_window=lambda: bool(self.window and self.window.is_active()),
         )
 
         self.settings.connect("changed::sound-feedback",
