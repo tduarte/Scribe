@@ -76,6 +76,24 @@
   <translation type="gettext">scribe</translation>
 
   <releases>
+    <release version="0.2.0" date="2026-09-18">
+      <description>
+        <p>
+          Text arrives sooner. The speech model now loads while you are still
+          speaking, where it used to load after you let go of the shortcut.
+        </p>
+        <ul>
+          <li>A model download shows how much has arrived and how long is left</li>
+          <li>Scribe asks for permission to paste during setup, not in the middle of your first dictation</li>
+          <li>The shortcut keeps working after the desktop's portal service restarts</li>
+          <li>A microphone that fails while recording is reported, and a stage that hangs now times out and says which one it was</li>
+          <li>Cancelling discards the transcription where it used to insert it late</li>
+          <li>Custom words no longer rewrite similar words, such as "describe" into "Scribe", and English filler words are no longer removed from other languages</li>
+          <li>Dictating with Scribe's own window in front copies the text where it used to report a failure</li>
+          <li>Deleted transcripts are scrubbed from the history file, and the retention setting applies after every dictation</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.1.2" date="2026-08-28">
       <description>
         <p>
