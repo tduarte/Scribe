@@ -5,6 +5,10 @@ from __future__ import annotations
 from gi.repository import Adw, Gio, GLib, Gtk
 
 from models import Download
+from relative_time import remaining
+
+# How long a download runs before its rate is worth an estimate.
+ETA_AFTER_SECONDS = 3
 
 TIER_LABEL = {
     1: "Fastest, least accurate",
@@ -23,7 +27,10 @@ class ModelsPage(Gtk.Box):
         self.settings = application.settings
         self.store = application.models
         self._downloads: dict[str, Download] = {}
-        self._progress: dict[str, Gtk.ProgressBar] = {}
+        self._progress: dict[str, tuple[Adw.ActionRow, Gtk.ProgressBar]] = {}
+        # The last status and fraction shown, so a rebuilt row picks up where
+        # the old one left off instead of waiting for the next chunk.
+        self._status: dict[str, tuple[str, float]] = {}
         self._syncing = False
 
         self.page = Adw.PreferencesPage()
@@ -142,14 +149,25 @@ class ModelsPage(Gtk.Box):
         downloading = model.id in self._downloads
 
         if downloading:
-            bar = Gtk.ProgressBar(
-                valign=Gtk.Align.CENTER, width_request=140, show_text=True
+            # The subtitle carries the status while the download runs, so the
+            # bar needs no text of its own. Tabular figures keep the line from
+            # shifting as the digits change.
+            row.add_css_class("numeric")
+            status, fraction = self._status.get(
+                model.id, ("Starting download…", 0.0)
             )
-            self._progress[model.id] = bar
+            row.set_subtitle(status)
+            bar = Gtk.ProgressBar(
+                valign=Gtk.Align.CENTER, width_request=160, fraction=fraction
+            )
+            bar.update_property(
+                [Gtk.AccessibleProperty.LABEL], [f"Downloading {model.name}"]
+            )
+            self._progress[model.id] = (row, bar)
             row.add_suffix(bar)
             stop = Gtk.Button(
                 icon_name="process-stop-symbolic", valign=Gtk.Align.CENTER,
-                css_classes=["flat"], tooltip_text="Cancel download",
+                css_classes=["flat", "circular"], tooltip_text="Cancel download",
             )
             stop.connect("clicked", lambda *_: self.cancel_download(model))
             row.add_suffix(stop)
@@ -167,16 +185,33 @@ class ModelsPage(Gtk.Box):
         if model.id in self._downloads:
             return
 
+        started = GLib.get_monotonic_time()
+
         def progress(received: int, total: int) -> None:
-            bar = self._progress.get(model.id)
-            if bar is not None and total:
-                bar.set_fraction(min(1.0, received / total))
-                bar.set_text(f"{GLib.format_size(received)} of "
-                             f"{GLib.format_size(total)}")
+            entry = self._progress.get(model.id)
+            if entry is None:
+                return
+            row, bar = entry
+            if not total:
+                bar.pulse()
+                status = f"{GLib.format_size(received)} downloaded"
+                self._status[model.id] = (status, 0.0)
+                row.set_subtitle(status)
+                return
+            fraction = min(1.0, received / total)
+            bar.set_fraction(fraction)
+            status = f"{GLib.format_size(received)} of {GLib.format_size(total)}"
+            # The rate over the first few seconds says little about the rest.
+            elapsed = (GLib.get_monotonic_time() - started) / 1_000_000
+            if elapsed >= ETA_AFTER_SECONDS and received:
+                status += f" · {remaining((total - received) * elapsed / received)}"
+            self._status[model.id] = (status, fraction)
+            row.set_subtitle(status)
 
         def done(ok: bool, error: str) -> None:
             self._downloads.pop(model.id, None)
             self._progress.pop(model.id, None)
+            self._status.pop(model.id, None)
             if ok:
                 if not self.settings.get_string("active-model"):
                     self.settings.set_string("active-model", model.id)
