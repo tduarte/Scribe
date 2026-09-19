@@ -9,7 +9,7 @@ the listing breaks with no local error, so keep them exactly as they are:
 
 | File | Caption in the metainfo |
 |---|---|
-| `main.png` | Dictating into a text editor |
+| `main.png` | Ready to dictate with a hold-to-talk shortcut |
 | `models.png` | Choosing a speech recognition model |
 
 `main.png` carries `type="default"` — it is the one shown first and used as the thumbnail. If the
