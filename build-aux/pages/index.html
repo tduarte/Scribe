@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Scribe</title>
+  <style>
+    :root { color-scheme: light dark; }
+    body {
+      font: 16px/1.5 system-ui, sans-serif;
+      max-width: 36rem; margin: 4rem auto; padding: 0 1rem;
+    }
+    pre {
+      padding: .75rem 1rem; border-radius: .5rem; overflow-x: auto;
+      background: color-mix(in srgb, currentColor 8%, transparent);
+    }
+    a.button {
+      display: inline-block; padding: .5rem 1.25rem; border-radius: .5rem;
+      background: #3584e4; color: #fff; text-decoration: none; font-weight: 600;
+    }
+  </style>
+</head>
+<body>
+  <h1>Scribe</h1>
+  <p>Dictate anywhere with your voice. For GNOME, as a Flatpak.</p>
+  <p><a class="button" href="scribe.flatpakref">Install</a></p>
+  <p>Or from a terminal:</p>
+  <pre>flatpak install --user @URL@/scribe.flatpakref</pre>
+  <p>Updates arrive with <code>flatpak update</code> and through GNOME Software.</p>
+  <p><a href="https://github.com/tduarte/Scribe">Source and documentation</a></p>
+</body>
+</html>

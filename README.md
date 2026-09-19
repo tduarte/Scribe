@@ -41,6 +41,18 @@ faster, so the GPU only starts paying off from `small` upwards.
 - A GPU with Vulkan for acceleration — otherwise it falls back to the CPU
 - An x86_64 CPU with AVX2, meaning roughly 2013 or newer
 
+## Installing
+
+```bash
+flatpak install --user https://tduarte.github.io/Scribe/scribe.flatpakref
+```
+
+This adds Scribe's own Flatpak repository, so updates arrive with
+`flatpak update` and through GNOME Software. The GNOME runtime comes from
+Flathub. Each [release](https://github.com/tduarte/Scribe/releases) also carries
+a single-file `scribe.flatpak`, which installs the same build but does not
+update.
+
 ## Building
 
 ```bash
