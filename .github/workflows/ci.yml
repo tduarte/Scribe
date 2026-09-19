@@ -86,6 +86,23 @@ jobs:
       - name: Lint manifest
         run: flatpak-builder-lint manifest build-aux/io.github.tduarte.Scribe.yaml
 
+      # The manifest pins a release tag, so built as it stands it compiles the
+      # last release and never the change under review. Swap its source for the
+      # checkout. It keeps its path, which is what flatpak-builder keys its
+      # cache on, so the release workflow still reuses the modules built here.
+      # The skipped directories are the ones the build action writes into the
+      # workspace.
+      - name: Build the checkout, not the pinned tag
+        run: |
+          manifest=build-aux/io.github.tduarte.Scribe.yaml
+          sed -i -E \
+            -e 's|^( +)- type: git$|\1- type: dir|' \
+            -e 's|^( +)url: https://github.com/tduarte/Scribe\.git$|\1path: ..\n\1skip:\n\1  - .flatpak-builder\n\1  - .git\n\1  - flatpak_app\n\1  - repo|' \
+            -e '/^ +tag: v/d' -e '/^ +commit: [0-9a-f]{40}$/d' "$manifest"
+          grep -q 'type: dir$' "$manifest"
+          grep -q 'path: \.\.$' "$manifest"
+          ! grep -Eq 'type: git$|^ +(tag|commit): ' "$manifest"
+
       - name: Build
         uses: flathub-infra/flatpak-github-actions/flatpak-builder@master
         with:
