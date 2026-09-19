@@ -51,7 +51,10 @@ jobs:
             exit 1
           fi
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
-          git fetch --depth=1 origin "refs/tags/$TAG:refs/tags/$TAG"
+          # Forced: on a tag push checkout has already made the tag, as a plain
+          # ref to the commit, and an annotated tag fetched over it is refused
+          # as a clobber.
+          git fetch --depth=1 origin "+refs/tags/$TAG:refs/tags/$TAG"
           version=$(git show "$TAG:meson.build" \
             | sed -n "s/^ *version: '\(.*\)',/\1/p" | head -1)
           if [ "v$version" != "$TAG" ]; then
