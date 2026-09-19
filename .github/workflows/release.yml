@@ -1,0 +1,167 @@
+name: Release
+
+# Pushing a v* tag builds that tag, signs it and publishes it twice: as a
+# Flatpak repository on GitHub Pages, which is what installs update from, and
+# as a single-file bundle on the GitHub release. docs/RELEASING.md has the
+# one-time setup (signing key, Pages) and the steps for cutting a release.
+on:
+  push:
+    tags: ['v*']
+  # Publishes an existing tag using the workflow, manifest and scripts of the
+  # branch it is run from. A fix to any of those can then be tried on a tag
+  # that is already out, where a tag push would need the tag moved.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Tag to build and publish, such as v0.1.2
+        required: true
+
+permissions:
+  contents: read
+
+# Two releases deploying to the same Pages site must not interleave, and one
+# that has started signing should finish.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build and sign
+    runs-on: ubuntu-latest
+    # pages: read is for configure-pages, which asks the API for the site URL.
+    permissions:
+      contents: read
+      pages: read
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-50
+      options: --privileged
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check the tag
+        id: tag
+        env:
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          if ! printf '%s' "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::'$TAG' is not a release tag"
+            exit 1
+          fi
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          # Forced: on a tag push checkout has already made the tag, as a plain
+          # ref to the commit, and an annotated tag fetched over it is refused
+          # as a clobber.
+          git fetch --depth=1 origin "+refs/tags/$TAG:refs/tags/$TAG"
+          version=$(git show "$TAG:meson.build" \
+            | sed -n "s/^ *version: '\(.*\)',/\1/p" | head -1)
+          if [ "v$version" != "$TAG" ]; then
+            echo "::error::tag is $TAG but its meson.build says $version"
+            exit 1
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "commit=$(git rev-parse "$TAG^{commit}")" >> "$GITHUB_OUTPUT"
+
+      # The manifest pins a tag and its commit, and a tag cannot contain its
+      # own commit id, so the file at any tag still names the release before
+      # it. Point it at what is being released.
+      - name: Pin the manifest to this tag
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+          COMMIT: ${{ steps.tag.outputs.commit }}
+        run: |
+          manifest=build-aux/io.github.tduarte.Scribe.yaml
+          sed -i -E \
+            -e "s|^( +tag: ).*|\1$TAG|" \
+            -e "s|^( +commit: ).*|\1$COMMIT|" "$manifest"
+          grep -q "tag: $TAG\$" "$manifest"
+          grep -q "commit: $COMMIT\$" "$manifest"
+
+      - name: Import the signing key
+        id: key
+        env:
+          FLATPAK_GPG_PRIVATE_KEY: ${{ secrets.FLATPAK_GPG_PRIVATE_KEY }}
+        run: |
+          if [ -z "$FLATPAK_GPG_PRIVATE_KEY" ]; then
+            echo "::error::the FLATPAK_GPG_PRIVATE_KEY secret is not set, see docs/RELEASING.md"
+            exit 1
+          fi
+          printf '%s\n' "$FLATPAK_GPG_PRIVATE_KEY" | gpg --batch --import
+          fingerprint=$(gpg --batch --list-secret-keys --with-colons \
+            | awk -F: '$1=="fpr"{print $10; exit}')
+          echo "fingerprint=$fingerprint" >> "$GITHUB_OUTPUT"
+
+      # No mirror-screenshots-url, unlike CI: that rewrites the catalog to
+      # dl.flathub.org paths only Flathub can fill. Without it the catalog
+      # keeps the screenshot URLs from the metainfo, which resolve.
+      - name: Build
+        uses: flathub-infra/flatpak-github-actions/flatpak-builder@master
+        with:
+          bundle: scribe.flatpak
+          manifest-path: build-aux/io.github.tduarte.Scribe.yaml
+          cache-key: flatpak-builder-${{ github.sha }}
+          branch: stable
+          gpg-sign: ${{ steps.key.outputs.fingerprint }}
+          build-bundle: true
+          upload-artifact: false
+
+      - name: Find the Pages URL
+        id: pages
+        uses: actions/configure-pages@v5
+
+      - name: Assemble the site
+        run: |
+          build-aux/publish-repo.sh repo site \
+            "${{ steps.pages.outputs.base_url }}" \
+            "${{ steps.key.outputs.fingerprint }}"
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bundle
+          path: scribe.flatpak
+
+  pages:
+    name: Publish the repository
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - id: deploy
+        uses: actions/deploy-pages@v4
+
+  bundle:
+    name: Attach the bundle
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: bundle
+
+      # The release may already exist, when the tag was made by drafting the
+      # release on GitHub.
+      - name: Upload to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.build.outputs.tag }}
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" scribe.flatpak --clobber
+          else
+            gh release create "$TAG" scribe.flatpak \
+              --title "Scribe ${TAG#v}" --generate-notes
+          fi

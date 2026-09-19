@@ -1,4 +1,4 @@
-"""Human phrasing for when something happened."""
+"""Human phrasing for when something happened, or how long it has left."""
 
 from __future__ import annotations
 
@@ -36,3 +36,20 @@ def describe(seconds_ago: float) -> str:
     if seconds_ago < 60 * DAY:
         return f"{int(seconds_ago // (7 * DAY))} weeks ago"
     return "a long time ago"
+
+
+def remaining(seconds_left: float) -> str:
+    """Phrase how long a running task still has to go.
+
+    As coarse as describe(): an estimate from a transfer rate is not worth
+    more precision than a minute.
+    """
+    if seconds_left < MINUTE:
+        return "less than a minute left"
+    if seconds_left < 2 * MINUTE:
+        return "a minute left"
+    if seconds_left < HOUR:
+        return f"{int(seconds_left // MINUTE)} minutes left"
+    if seconds_left < 2 * HOUR:
+        return "an hour left"
+    return f"{int(seconds_left // HOUR)} hours left"
