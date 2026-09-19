@@ -18,12 +18,13 @@ Pages' 1 GB.
 
 Clients trust the repository through a GPG key whose public half is embedded in
 `scribe.flatpakref`. Use a key made for this and nothing else. It has no
-passphrase because CI has nobody to type one.
+passphrase because CI has nobody to type one. The user id is published with the
+key, so it names the project rather than a person.
 
 ```bash
 export GNUPGHOME="$(mktemp -d)"
 gpg --batch --passphrase '' --quick-generate-key \
-    "Scribe releases <tduarte.personal@gmail.com>" ed25519 sign never
+    "Scribe releases (https://github.com/tduarte/Scribe)" ed25519 sign never
 gpg --armor --export-secret-keys > scribe-signing-key.asc
 gh secret set FLATPAK_GPG_PRIVATE_KEY < scribe-signing-key.asc
 ```
