@@ -75,8 +75,15 @@ the tag being built, so the file does not need updating first.
 If the GitHub release for the tag already exists, the bundle is added to it.
 Otherwise one is created with generated notes.
 
-To run a release again, open Actions → Release → Run workflow and choose the tag
-under "Use workflow from".
+## Publishing a tag again
+
+```bash
+gh workflow run release.yml --ref main -f tag=v0.1.3
+```
+
+This builds the tag's source with the workflow, manifest and scripts of the
+branch it runs from, so a fix to any of them can be tried on a tag that is
+already out. A run from `main` deploys without the `v*` environment rule.
 
 ## Checking a release
 

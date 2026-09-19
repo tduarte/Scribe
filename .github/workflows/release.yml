@@ -7,8 +7,14 @@ name: Release
 on:
   push:
     tags: ['v*']
-  # For re-running a release: choose the tag under "Use workflow from".
+  # Publishes an existing tag using the workflow, manifest and scripts of the
+  # branch it is run from. A fix to any of those can then be tried on a tag
+  # that is already out, where a tag push would need the tag moved.
   workflow_dispatch:
+    inputs:
+      tag:
+        description: Tag to build and publish, such as v0.1.2
+        required: true
 
 permissions:
   contents: read
@@ -30,36 +36,44 @@ jobs:
     container:
       image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-50
       options: --privileged
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
     steps:
       - uses: actions/checkout@v4
 
       - name: Check the tag
         id: tag
+        env:
+          TAG: ${{ inputs.tag || github.ref_name }}
         run: |
-          if [ "$GITHUB_REF_TYPE" != "tag" ]; then
-            echo "::error::run this from a v* tag, not from $GITHUB_REF_NAME"
-            exit 1
-          fi
-          version=$(sed -n "s/^ *version: '\(.*\)',/\1/p" meson.build | head -1)
-          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
-            echo "::error::tag is $GITHUB_REF_NAME but meson.build says $version"
+          if ! printf '%s' "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::'$TAG' is not a release tag"
             exit 1
           fi
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
-          echo "commit=$(git rev-parse 'HEAD^{commit}')" >> "$GITHUB_OUTPUT"
+          git fetch --depth=1 origin "refs/tags/$TAG:refs/tags/$TAG"
+          version=$(git show "$TAG:meson.build" \
+            | sed -n "s/^ *version: '\(.*\)',/\1/p" | head -1)
+          if [ "v$version" != "$TAG" ]; then
+            echo "::error::tag is $TAG but its meson.build says $version"
+            exit 1
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "commit=$(git rev-parse "$TAG^{commit}")" >> "$GITHUB_OUTPUT"
 
       # The manifest pins a tag and its commit, and a tag cannot contain its
       # own commit id, so the file at any tag still names the release before
       # it. Point it at what is being released.
       - name: Pin the manifest to this tag
         env:
+          TAG: ${{ steps.tag.outputs.tag }}
           COMMIT: ${{ steps.tag.outputs.commit }}
         run: |
           manifest=build-aux/io.github.tduarte.Scribe.yaml
           sed -i -E \
-            -e "s|^( +tag: ).*|\1$GITHUB_REF_NAME|" \
+            -e "s|^( +tag: ).*|\1$TAG|" \
             -e "s|^( +commit: ).*|\1$COMMIT|" "$manifest"
-          grep -q "tag: $GITHUB_REF_NAME\$" "$manifest"
+          grep -q "tag: $TAG\$" "$manifest"
           grep -q "commit: $COMMIT\$" "$manifest"
 
       - name: Import the signing key
@@ -140,10 +154,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.build.outputs.tag }}
         run: |
-          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-            gh release upload "$GITHUB_REF_NAME" scribe.flatpak --clobber
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" scribe.flatpak --clobber
           else
-            gh release create "$GITHUB_REF_NAME" scribe.flatpak \
-              --title "Scribe ${GITHUB_REF_NAME#v}" --generate-notes
+            gh release create "$TAG" scribe.flatpak \
+              --title "Scribe ${TAG#v}" --generate-notes
           fi
