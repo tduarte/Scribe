@@ -3,30 +3,585 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Scribe</title>
+  <title>Scribe — Dictate anywhere with your voice</title>
+  <meta name="description" content="Hold a keyboard shortcut, speak, and Scribe types what you said into whatever application you were using. For GNOME, as a Flatpak.">
   <style>
-    :root { color-scheme: light dark; }
+    /* Colours are the app's own: the two <branding> values from the AppStream
+       metainfo, plus the ambers out of the icon. Nothing here is invented. */
+    :root {
+      color-scheme: light dark;
+      --bg: #f9dfc4;
+      --ink: #40260f;
+      --dim: #7a5a3c;
+      --line: #e3c8a8;
+      --accent: #e66100;
+      --accent-strong: #c64600;
+      --accent-ink: #ffffff;
+
+      /* The recreated window keeps Adwaita's near-neutral greys, warmed just
+         enough to sit on the page, so it still reads as an application. */
+      --win: #fdfbf9;
+      --win-head: #f0ebe6;
+      --win-line: #ddd4cb;
+      --win-ink: #2e2622;
+      --win-dim: #7d726a;
+      --win-fill: rgba(46, 38, 34, .08);
+
+      --term: #2b2320;
+      --term-ink: #f2e8dd;
+
+      --radius: 12px;
+      --shadow: 0 1px 2px rgba(64, 38, 15, .08), 0 6px 20px rgba(64, 38, 15, .10);
+      --win-shadow: 0 1px 3px rgba(64, 38, 15, .14), 0 14px 40px rgba(64, 38, 15, .18);
+
+      /* One clock drives the whole demo. */
+      --t: 4s;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #40260f;
+        --ink: #f7e7d6;
+        --dim: #c9ab8e;
+        --line: #6b4626;
+        --accent: #ffa348;
+        --accent-strong: #ffa348;
+        --accent-ink: #3d1f08;
+
+        --win: #2b2521;
+        --win-head: #221d1a;
+        --win-line: #3d352f;
+        --win-ink: #f2ebe5;
+        --win-dim: #a89a8e;
+        --win-fill: rgba(255, 255, 255, .10);
+
+        --term: #1c1613;
+        --term-ink: #f2e8dd;
+
+        --shadow: 0 1px 2px rgba(0, 0, 0, .28), 0 6px 20px rgba(0, 0, 0, .30);
+        --win-shadow: 0 1px 3px rgba(0, 0, 0, .35), 0 14px 40px rgba(0, 0, 0, .40);
+      }
+    }
+
+    * { box-sizing: border-box; }
+
     body {
-      font: 16px/1.5 system-ui, sans-serif;
-      max-width: 36rem; margin: 4rem auto; padding: 0 1rem;
+      margin: 0;
+      padding: 3.5rem 1.25rem 4rem;
+      background: var(--bg);
+      color: var(--ink);
+      font: 16px/1.6 system-ui, -apple-system, "Segoe UI", Cantarell, sans-serif;
+      -webkit-font-smoothing: antialiased;
     }
-    pre {
-      padding: .75rem 1rem; border-radius: .5rem; overflow-x: auto;
-      background: color-mix(in srgb, currentColor 8%, transparent);
+    main { max-width: 44rem; margin: 0 auto; }
+
+    .masthead { display: flex; align-items: center; justify-content: center; gap: .85rem; }
+    .masthead > svg { width: 64px; height: 64px; flex: none; }
+    .wordmark { font-size: 1.85rem; font-weight: 700; letter-spacing: -.01em; }
+
+    h1 {
+      margin: 1.9rem 0 .7rem;
+      font-size: clamp(2rem, 7vw, 2.9rem);
+      line-height: 1.12;
+      letter-spacing: -.022em;
+      font-weight: 700;
+      text-align: center;
+      text-wrap: balance;
     }
-    a.button {
-      display: inline-block; padding: .5rem 1.25rem; border-radius: .5rem;
-      background: #3584e4; color: #fff; text-decoration: none; font-weight: 600;
+    .lede {
+      margin: 0 auto 2rem;
+      font-size: 1.15rem;
+      color: var(--dim);
+      max-width: 34rem;
+      text-align: center;
+      text-wrap: pretty;
+    }
+
+    /* ---- the recreated window ---------------------------------------- */
+
+    .app {
+      background: var(--win);
+      color: var(--win-ink);
+      border: 1px solid var(--win-line);
+      border-radius: var(--radius);
+      box-shadow: var(--win-shadow);
+      overflow: hidden;
+    }
+
+    .app-head {
+      display: grid;
+      grid-template-columns: 1fr auto 1fr;
+      align-items: center;
+      gap: .5rem;
+      padding: .45rem .6rem;
+      background: var(--win-head);
+      border-bottom: 1px solid var(--win-line);
+    }
+    .app-title {
+      display: none;
+      grid-column: 2;
+      font-size: .92rem; font-weight: 700;
+    }
+
+    /* Adw.ViewSwitcher, wide policy: icon and label side by side. */
+    .switcher { grid-column: 2; display: flex; gap: .15rem; }
+    .tab {
+      display: flex; align-items: center; gap: .4rem;
+      padding: .35rem .7rem;
+      border-radius: 7px;
+      font-size: .88rem; font-weight: 600;
+      color: var(--win-dim);
+      white-space: nowrap;
+    }
+    .tab.on { background: var(--win-fill); color: var(--win-ink); }
+    .tab svg { width: 16px; height: 16px; }
+
+    .head-end { grid-column: 3; display: flex; justify-content: flex-end; gap: .25rem; }
+    .hbtn {
+      display: grid; place-items: center;
+      width: 28px; height: 28px;
+      border-radius: 50%;
+      background: var(--win-fill);
+      color: var(--win-ink);
+    }
+    .hbtn svg { width: 15px; height: 15px; }
+
+    /* Adw.StatusPage */
+    .app-body { padding: 2rem 1.25rem 1.75rem; text-align: center; }
+
+    .status-icon {
+      display: grid; justify-content: center;
+      margin-bottom: .85rem;
+      color: var(--win-dim);
+      opacity: .75;
+    }
+    .status-icon svg { grid-area: 1 / 1; width: 72px; height: 72px; }
+
+    .status-title {
+      display: grid; justify-items: center;
+      font-size: 1.5rem; font-weight: 700; letter-spacing: -.01em;
+      margin-bottom: 1.35rem;
+    }
+    .status-title span { grid-area: 1 / 1; }
+
+    /* content box: width_request=420, spacing=20, centred */
+    .status-content {
+      max-width: 420px; margin: 0 auto;
+      display: flex; flex-direction: column; gap: 1.25rem; align-items: center;
+    }
+
+    .shortcut {
+      display: flex; align-items: center; gap: .4rem;
+      font-size: .95rem; color: var(--win-dim);
+    }
+    .shortcut .word { color: var(--win-dim); }
+
+    /* Keycaps to the app's own spec, with the bottom edge as a shadow rather
+       than a border so pressing one cannot reflow the row. */
+    kbd {
+      display: inline-block;
+      font: inherit; font-weight: 700;
+      color: var(--win-ink);
+      background: var(--win-fill);
+      border: 1px solid var(--win-line);
+      border-radius: 6px;
+      box-shadow: 0 2px 0 var(--win-line);
+      padding: 2px 10px;
+      line-height: 1.35;
+      white-space: nowrap;
+    }
+
+    /* Gtk.LevelBar, continuous mode: one bar that fills, not a row of bars. */
+    .level {
+      width: 100%; height: 8px;
+      border-radius: 4px;
+      background: var(--win-fill);
+      overflow: hidden;
+      opacity: 0;
+    }
+    .level i { display: block; height: 100%; width: 0; border-radius: 4px; background: var(--accent); }
+
+    /* suggested-action + pill */
+    .record {
+      display: grid; justify-items: center;
+      padding: .6rem 1.5rem;
+      border-radius: 999px;
+      background: var(--accent-strong);
+      color: var(--accent-ink);
+      text-decoration: none;
+      font-size: 1rem; font-weight: 700;
+      box-shadow: 0 1px 2px rgba(64, 38, 15, .2);
+    }
+    .record:hover { background: var(--accent); }
+    .record:focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
+    /* The resting label is the one the page settles on. */
+    .record span { grid-area: 1 / 1; opacity: 0; }
+    .record .lbl-install { opacity: 1; }
+
+    .app-foot { font-size: .8rem; color: var(--win-dim); }
+
+    /* ---- the terminal it pastes into --------------------------------- */
+
+    .term {
+      margin-top: 1.35rem;
+      background: var(--term);
+      color: var(--term-ink);
+      border-radius: var(--radius);
+      box-shadow: var(--win-shadow);
+      overflow: hidden;
+    }
+    .term-head {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: .5rem .8rem;
+      background: rgba(255, 255, 255, .06);
+      font-size: .82rem; font-weight: 600;
+      color: rgba(242, 232, 221, .72);
+    }
+    .term-head .hbtn { background: rgba(255, 255, 255, .1); color: inherit; width: 24px; height: 24px; }
+    .term-body {
+      display: flex; gap: .55rem;
+      padding: .95rem .9rem 1.05rem;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: .9rem; line-height: 1.55;
+    }
+    .prompt { color: var(--accent); font-weight: 700; flex: none; }
+    .cmd {
+      /* The whole command selects in one click, since the page ships no script. */
+      user-select: all;
+      flex: 1; min-width: 0;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      border-radius: 4px;
+    }
+    .caret {
+      flex: none;
+      width: 0; height: 1.05em;
+      align-self: center;
+      background: var(--term-ink);
+    }
+    @keyframes blink { 0%, 50% { opacity: .85 } 50.01%, 100% { opacity: 0 } }
+
+    /* ---- install ------------------------------------------------------ */
+
+    /* Revealed only once the script is running, so it is never a dead control. */
+    .replay-row { display: none; text-align: center; margin-top: 1.1rem; }
+    .js .replay-row { display: block; }
+    .replay {
+      display: inline-flex; align-items: center; gap: .4rem;
+      padding: .35rem .85rem;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: transparent;
+      color: var(--dim);
+      font: inherit; font-size: .85rem; font-weight: 600;
+      cursor: pointer;
+    }
+    .replay:hover { color: var(--ink); border-color: var(--dim); }
+    .replay:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .replay svg { width: 14px; height: 14px; }
+
+    .cta { margin-top: 1.25rem; text-align: center; }
+    .note { margin: 1rem 0 0; font-size: .92rem; color: var(--dim); }
+    .note code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .92em; }
+    .req { margin: .45rem 0 0; font-size: .86rem; color: var(--dim); }
+
+    footer {
+      margin: 3rem 0 0; padding-top: 1.5rem;
+      border-top: 1px solid var(--line);
+      font-size: .9rem; color: var(--dim);
+      display: flex; flex-wrap: wrap; justify-content: center; gap: .4rem 1.25rem;
+    }
+    footer a { color: inherit; text-underline-offset: 3px; }
+    footer a:hover { color: var(--ink); }
+
+    /* ---- the demo: one pass, ending at rest -------------------------- */
+    /* Every animation below is the same length and keeps its last frame, so
+       the page settles into the state the plain CSS above already describes. */
+
+    .ic, .status-title span { opacity: 0; }
+    .status-icon .ic-ready, .status-title .t-ready { opacity: 1; }
+
+    .ic-ready  { animation: s-ready  var(--t) linear forwards; }
+    .ic-listen { animation: s-listen var(--t) linear forwards; }
+    .ic-trans  { animation: s-trans  var(--t) linear forwards; }
+    .ic-insert { animation: s-insert var(--t) linear forwards; }
+    .t-ready   { animation: s-ready  var(--t) linear forwards; }
+    .t-listen  { animation: s-listen var(--t) linear forwards; }
+    .t-trans   { animation: s-trans  var(--t) linear forwards; }
+    .t-insert  { animation: s-insert var(--t) linear forwards; }
+
+    @keyframes s-ready  { 0%, 8% { opacity: 1 } 10%, 80% { opacity: 0 } 82%, 100% { opacity: 1 } }
+    @keyframes s-listen { 0%, 8% { opacity: 0 } 10%, 45% { opacity: 1 } 47%, 100% { opacity: 0 } }
+    @keyframes s-trans  { 0%, 45% { opacity: 0 } 47%, 63% { opacity: 1 } 65%, 100% { opacity: 0 } }
+    @keyframes s-insert { 0%, 63% { opacity: 0 } 65%, 80% { opacity: 1 } 82%, 100% { opacity: 0 } }
+
+    /* The keys go down as recording starts and come up as it stops. */
+    .shortcut kbd { animation: keypress var(--t) linear forwards; }
+    @keyframes keypress {
+      0%, 7%    { transform: translateY(0); box-shadow: 0 2px 0 var(--win-line); background: var(--win-fill); }
+      9%, 44%   { transform: translateY(2px); box-shadow: 0 0 0 var(--win-line);
+                  background: color-mix(in srgb, var(--accent) 22%, transparent); }
+      46%, 100% { transform: translateY(0); box-shadow: 0 2px 0 var(--win-line); background: var(--win-fill); }
+    }
+    /* set_sensitive(False) once the shortcut is no longer what you press */
+    .shortcut { animation: dim var(--t) linear forwards; }
+    @keyframes dim { 0%, 45% { opacity: 1 } 47%, 80% { opacity: .45 } 82%, 100% { opacity: 1 } }
+
+    .level { animation: reveal var(--t) linear forwards; }
+    @keyframes reveal { 0%, 8% { opacity: 0 } 10%, 44% { opacity: 1 } 46%, 100% { opacity: 0 } }
+
+    .level i { animation: speak var(--t) linear forwards; }
+    @keyframes speak {
+      0%, 9% { width: 0 }
+      12% { width: 34% } 15% { width: 61% } 18% { width: 43% }
+      21% { width: 78% } 24% { width: 52% } 27% { width: 88% }
+      30% { width: 47% } 33% { width: 71% } 36% { width: 39% }
+      39% { width: 66% } 42% { width: 81% }
+      45%, 100% { width: 0 }
+    }
+
+    .lbl-start   { animation: s-idle    var(--t) linear forwards; }
+    .lbl-stop    { animation: s-rec     var(--t) linear forwards; }
+    .lbl-install { animation: s-install var(--t) linear forwards; }
+    @keyframes s-idle    { 0%, 8% { opacity: 1 } 10%, 45% { opacity: 0 } 47%, 80% { opacity: 1 } 82%, 100% { opacity: 0 } }
+    @keyframes s-rec     { 0%, 8% { opacity: 0 } 10%, 45% { opacity: 1 } 47%, 100% { opacity: 0 } }
+    @keyframes s-install { 0%, 80% { opacity: 0 } 82%, 100% { opacity: 1 } }
+
+    /* set_sensitive(state not in BUSY) */
+    .record { animation: busy var(--t) linear forwards; }
+    @keyframes busy { 0%, 45% { opacity: 1 } 47%, 80% { opacity: .5 } 82%, 100% { opacity: 1 } }
+
+    /* Scribe pastes rather than types, so the command lands all at once. */
+    .cmd { animation: land var(--t) linear forwards; }
+    .caret { animation: blink 1.1s steps(1, end) infinite, shift var(--t) linear forwards; }
+    @keyframes land {
+      0%, 71%   { opacity: 0; background: transparent; }
+      72%       { opacity: 1; background: color-mix(in srgb, var(--accent) 55%, transparent); }
+      84%, 100% { opacity: 1; background: transparent; }
+    }
+    @keyframes shift {
+      0%, 71%   { opacity: 1; width: 8px; margin-right: .3rem; }
+      72%, 100% { opacity: 0; width: 0; margin-right: 0; }
+    }
+
+    .demo.rewind, .demo.rewind * { animation: none !important; }
+
+    @media (max-width: 40rem) {
+      /* Adw.Breakpoint "max-width: 560sp": the switcher leaves the header for a
+         bottom bar, and the header falls back to the window title. */
+      .switcher { display: none; }
+      .app-title { display: block; text-align: center; }
+      .switcher-bar {
+        display: flex; justify-content: center; gap: .15rem;
+        padding: .3rem;
+        background: var(--win-head);
+        border-top: 1px solid var(--win-line);
+      }
+      .switcher-bar .tab { flex-direction: column; gap: .15rem; font-size: .75rem; padding: .3rem .6rem; }
+      .status-icon svg { width: 60px; height: 60px; }
+      .status-title { font-size: 1.3rem; }
+      .app-body { padding: 1.5rem 1rem 1.35rem; }
+    }
+    @media (min-width: 40.01rem) { .switcher-bar { display: none; } }
+
+    @media (max-width: 26rem) {
+      body { padding-top: 2.5rem; }
+      .masthead > svg { width: 52px; height: 52px; }
+      .wordmark { font-size: 1.55rem; }
+      .shortcut { font-size: .85rem; gap: .3rem; }
+      kbd { padding: 2px 7px; }
+    }
+
+    /* Nothing moves: the page is already drawn in its finished state, with the
+       command in the terminal and the window back at Ready. */
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { animation: none !important; transition: none !important; }
+      .cmd { opacity: 1; }
+      .caret { display: none; }
+      /* Nothing to replay when nothing moved. */
+      .js .replay-row { display: none; }
     }
   </style>
 </head>
 <body>
-  <h1>Scribe</h1>
-  <p>Dictate anywhere with your voice. For GNOME, as a Flatpak.</p>
-  <p><a class="button" href="scribe.flatpakref">Install</a></p>
-  <p>Or from a terminal:</p>
-  <pre>flatpak install --user @URL@/scribe.flatpakref</pre>
-  <p>Updates arrive with <code>flatpak update</code> and through GNOME Software.</p>
-  <p><a href="https://github.com/tduarte/Scribe">Source and documentation</a></p>
+<main>
+
+  <div class="masthead">
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="Scribe">
+      <defs>
+        <linearGradient id="scShell" x1=".15" y1="0" x2=".85" y2="1">
+          <stop offset="0" stop-color="#ffd39b"/>
+          <stop offset=".42" stop-color="#ffa348"/>
+          <stop offset="1" stop-color="#e66100"/>
+        </linearGradient>
+        <linearGradient id="scBase" x1="0" y1="0" x2="1" y2="0">
+          <stop offset="0" stop-color="#5e5c64"/>
+          <stop offset=".55" stop-color="#8a8890"/>
+          <stop offset="1" stop-color="#5e5c64"/>
+        </linearGradient>
+        <clipPath id="scClip"><rect x="50" y="30" width="28" height="44" rx="14"/></clipPath>
+      </defs>
+      <rect x="36" y="100" width="56" height="12" rx="6" fill="#3d3846"/>
+      <rect x="36" y="100" width="56" height="8" rx="4" fill="url(#scBase)"/>
+      <rect x="56" y="80" width="16" height="24" fill="#5e5c64"/>
+      <rect x="36" y="20" width="56" height="72" rx="26" fill="#c64600"/>
+      <rect x="36" y="16" width="56" height="72" rx="26" fill="url(#scShell)"/>
+      <rect x="48" y="28" width="32" height="48" rx="16" fill="#3d3846"/>
+      <g clip-path="url(#scClip)" fill="#8a8890">
+        <circle cx="52" cy="33" r="2.9"/><circle cx="60" cy="33" r="2.9"/>
+        <circle cx="68" cy="33" r="2.9"/><circle cx="76" cy="33" r="2.9"/>
+        <circle cx="56" cy="40" r="2.9"/><circle cx="64" cy="40" r="2.9"/>
+        <circle cx="72" cy="40" r="2.9"/>
+        <circle cx="52" cy="47" r="2.9"/><circle cx="60" cy="47" r="2.9"/>
+        <circle cx="68" cy="47" r="2.9"/><circle cx="76" cy="47" r="2.9"/>
+        <circle cx="56" cy="54" r="2.9"/><circle cx="64" cy="54" r="2.9"/>
+        <circle cx="72" cy="54" r="2.9"/>
+        <circle cx="52" cy="61" r="2.9"/><circle cx="60" cy="61" r="2.9"/>
+        <circle cx="68" cy="61" r="2.9"/><circle cx="76" cy="61" r="2.9"/>
+        <circle cx="56" cy="68" r="2.9"/><circle cx="64" cy="68" r="2.9"/>
+        <circle cx="72" cy="68" r="2.9"/>
+      </g>
+    </svg>
+    <span class="wordmark">Scribe</span>
+  </div>
+
+  <h1>Dictate anywhere with your voice.</h1>
+  <p class="lede">
+    Hold a keyboard shortcut, speak, and Scribe types what you said into
+    whatever application you were using.
+  </p>
+
+  <!-- The symbolic icons the app asks GTK for, redrawn at the same 16px grid. -->
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+    <g id="i-mic" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linecap="round">
+      <rect x="5.6" y="1.7" width="4.8" height="8" rx="2.4"/>
+      <path d="M3.4 7.4a4.6 4.6 0 0 0 9.2 0"/><path d="M8 12v2.3"/>
+    </g>
+    <g id="i-mic-high" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linecap="round">
+      <rect x="5.6" y="1.7" width="4.8" height="8" rx="2.4"/>
+      <path d="M3.4 7.4a4.6 4.6 0 0 0 9.2 0"/><path d="M8 12v2.3"/>
+      <path d="M1.5 4.6a7 7 0 0 0 0 6.2"/><path d="M14.5 4.6a7 7 0 0 1 0 6.2"/>
+    </g>
+    <g id="i-loading" fill="currentColor">
+      <circle cx="3" cy="8" r="1.45"/><circle cx="8" cy="8" r="1.45"/><circle cx="13" cy="8" r="1.45"/>
+    </g>
+    <g id="i-paste" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linejoin="round">
+      <rect x="3.2" y="2.6" width="9.6" height="11.6" rx="1.6"/>
+      <rect x="5.9" y="1.1" width="4.2" height="2.6" rx="1.1" fill="currentColor" stroke="none"/>
+      <path d="M5.8 8h4.4M5.8 11h3"/>
+    </g>
+    <g id="i-download" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M8 1.9v6.7"/><path d="M5.2 6.1 8 8.9l2.8-2.8"/><path d="M2.8 10.8v2.5h10.4v-2.5"/>
+    </g>
+    <g id="i-recent" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="8" cy="8" r="6.1"/><path d="M8 4.4V8l2.5 1.9"/>
+    </g>
+    <g id="i-menu" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+      <path d="M2.6 4.6h10.8M2.6 8h10.8M2.6 11.4h10.8"/>
+    </g>
+    <g id="i-close" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+      <path d="M4.6 4.6l6.8 6.8M11.4 4.6l-6.8 6.8"/>
+    </g>
+    <g id="i-replay" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M13.7 8a5.7 5.7 0 1 1-1.67-4.03"/><path d="M13.9 2v3.1h-3.1"/>
+    </g>
+  </defs></svg>
+
+  <div class="demo">
+
+    <div class="app">
+      <div class="app-head" aria-hidden="true">
+        <span class="app-title">Scribe</span>
+        <div class="switcher">
+          <span class="tab on"><svg viewBox="0 0 16 16"><use href="#i-mic"/></svg>Dictate</span>
+          <span class="tab"><svg viewBox="0 0 16 16"><use href="#i-download"/></svg>Models</span>
+          <span class="tab"><svg viewBox="0 0 16 16"><use href="#i-recent"/></svg>History</span>
+        </div>
+        <div class="head-end">
+          <span class="hbtn"><svg viewBox="0 0 16 16"><use href="#i-menu"/></svg></span>
+          <span class="hbtn"><svg viewBox="0 0 16 16"><use href="#i-close"/></svg></span>
+        </div>
+      </div>
+
+      <div class="app-body">
+        <div class="status-icon" aria-hidden="true">
+          <svg class="ic ic-ready"  viewBox="0 0 16 16"><use href="#i-mic"/></svg>
+          <svg class="ic ic-listen" viewBox="0 0 16 16"><use href="#i-mic-high"/></svg>
+          <svg class="ic ic-trans"  viewBox="0 0 16 16"><use href="#i-loading"/></svg>
+          <svg class="ic ic-insert" viewBox="0 0 16 16"><use href="#i-paste"/></svg>
+        </div>
+
+        <div class="status-title" aria-hidden="true">
+          <span class="t-ready">Ready</span>
+          <span class="t-listen">Listening</span>
+          <span class="t-trans">Transcribing</span>
+          <span class="t-insert">Inserting</span>
+        </div>
+
+        <div class="status-content">
+          <div class="shortcut" aria-hidden="true">
+            <span class="word">Hold</span>
+            <kbd>Alt</kbd><span class="word">+</span><kbd>Space</kbd>
+            <span class="word">and speak</span>
+          </div>
+          <div class="level" aria-hidden="true"><i></i></div>
+          <a class="record" href="scribe.flatpakref" aria-label="Install for GNOME">
+            <span class="lbl-start" aria-hidden="true">Start Dictating</span>
+            <span class="lbl-stop" aria-hidden="true">Stop</span>
+            <span class="lbl-install" aria-hidden="true">Install for GNOME</span>
+          </a>
+          <div class="app-foot" aria-hidden="true">Large v3 Turbo · running on your graphics card when available</div>
+        </div>
+      </div>
+
+      <div class="switcher-bar" aria-hidden="true">
+        <span class="tab on"><svg viewBox="0 0 16 16"><use href="#i-mic"/></svg>Dictate</span>
+        <span class="tab"><svg viewBox="0 0 16 16"><use href="#i-download"/></svg>Models</span>
+        <span class="tab"><svg viewBox="0 0 16 16"><use href="#i-recent"/></svg>History</span>
+      </div>
+    </div>
+
+    <div class="term">
+      <div class="term-head" aria-hidden="true">
+        <span>Terminal</span>
+        <span class="hbtn"><svg viewBox="0 0 16 16"><use href="#i-close"/></svg></span>
+      </div>
+      <div class="term-body">
+        <span class="prompt">$</span><span class="caret"></span><code class="cmd">flatpak install --user @URL@/scribe.flatpakref</code>
+      </div>
+    </div>
+
+    <div class="replay-row">
+      <button class="replay" type="button">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><use href="#i-replay"/></svg>Replay
+      </button>
+    </div>
+
+  </div>
+
+  <div class="cta">
+    <p class="note">Or run the command above. Updates arrive with <code>flatpak update</code> and through GNOME Software.</p>
+    <p class="req">Needs GNOME 48 or newer, on Wayland.</p>
+  </div>
+
+  <footer>
+    <a href="https://github.com/tduarte/Scribe">Source and documentation</a>
+    <span>GPL-3.0-or-later</span>
+  </footer>
+
+</main>
+
+<script>
+  (function () {
+    var demo = document.querySelector('.demo');
+    var button = document.querySelector('.replay');
+    if (!demo || !button) return;
+    document.documentElement.classList.add('js');
+    button.addEventListener('click', function () {
+      demo.classList.add('rewind');
+      void demo.offsetWidth; /* forces the reflow that makes the restart stick */
+      demo.classList.remove('rewind');
+    });
+  })();
+</script>
 </body>
 </html>
