@@ -76,6 +76,18 @@
   <translation type="gettext">scribe</translation>
 
   <releases>
+    <release version="0.2.1" date="2026-09-20">
+      <description>
+        <p>
+          Corrections to what software centres show about Scribe. The
+          application itself is unchanged.
+        </p>
+        <ul>
+          <li>The developer name is spelled Thiago Duarte</li>
+          <li>The first screenshot is captioned with what it shows, the Dictate tab at rest, rather than dictation into a text editor</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.2.0" date="2026-09-18">
       <description>
         <p>
