@@ -371,7 +371,7 @@ class ScribeApplication(Adw.Application):
         about = Adw.AboutDialog(
             application_name="Scribe",
             application_icon=self.get_application_id(),
-            developer_name="Tiago Duarte",
+            developer_name="Thiago Duarte",
             version=self.version,
             comments="Dictate anywhere with your voice, using Whisper running "
                      "entirely on your own machine.",
