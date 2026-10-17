@@ -56,10 +56,14 @@ update.
 ## Building
 
 ```bash
-flatpak install flathub org.gnome.Platform//50 org.gnome.Sdk//50
-flatpak-builder --user --install --force-clean build build-aux/scribe-dev.yaml
+flatpak install flathub org.gnome.Platform//50 org.gnome.Sdk//50 org.flatpak.Builder
+flatpak run org.flatpak.Builder --user --install --force-clean build build-aux/scribe-dev.yaml
 flatpak run io.github.tduarte.Scribe
 ```
+
+`org.flatpak.Builder` is flatpak-builder packaged as a Flatpak, so the build
+needs nothing from the host beyond Flatpak itself and is the same version
+everywhere.
 
 The first run asks which speech model to download. Models are stored in
 `~/.var/app/io.github.tduarte.Scribe/data/models/` and verified by sha256.
@@ -94,9 +98,16 @@ also where you can quit it.
 
 ## Development
 
+The unit tests import the app modules, which need PyGObject and the GTK,
+libadwaita, GStreamer and libsoup typelibs. Rather than installing those on the
+host, run them in a [distrobox](https://distrobox.it/), which works the same on
+any distribution:
+
 ```bash
-python3 -m venv --system-site-packages .venv && .venv/bin/pip install pytest
-.venv/bin/python -m pytest tests -q
+distrobox create -n Scribe -i registry.fedoraproject.org/fedora-toolbox:44 --yes
+distrobox enter Scribe -- sudo dnf install -y \
+    python3-gobject python3-pytest gtk4 libadwaita gstreamer1 libsoup3
+distrobox enter Scribe -- python3 -m pytest tests -q
 ```
 
 The portal spikes in `spikes/` are runnable against a built Flatpak and are how
