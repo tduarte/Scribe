@@ -65,8 +65,10 @@ flatpak run io.github.tduarte.Scribe
 needs nothing from the host beyond Flatpak itself and is the same version
 everywhere.
 
-The first run asks which speech model to download. Models are stored in
-`~/.var/app/io.github.tduarte.Scribe/data/models/` and verified by sha256.
+The first run explains the two permissions GNOME is about to ask for (the
+global shortcut, and the Remote Desktop grant used for pasting) before
+requesting each one, then asks which speech model to download. Models are stored
+in `~/.var/app/io.github.tduarte.Scribe/data/models/` and verified by sha256.
 
 ## Using it
 
