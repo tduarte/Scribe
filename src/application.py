@@ -12,6 +12,7 @@ import argparse
 import logging
 import os
 import sys
+from typing import Callable
 
 import gi
 
@@ -59,6 +60,8 @@ class ScribeApplication(Adw.Application):
         self.window = None
         self.controller: DictationController | None = None
         self.shortcuts: ShortcutManager | None = None
+        self._shortcut_timer: int | None = None
+        self._shortcut_waiters: list[Callable[[PortalError | None], None]] = []
         self._held = False
         self._start_hidden = False
         self.shortcut_error: str = ""
@@ -209,7 +212,6 @@ class ScribeApplication(Adw.Application):
                               lambda s, k: setattr(self.player, "volume",
                                                    s.get_double(k)))
 
-        GLib.timeout_add(SHORTCUT_START_DELAY_MS, self._start_shortcuts)
         self._request_background()
 
     def _load_styles(self) -> None:
@@ -246,6 +248,11 @@ class ScribeApplication(Adw.Application):
             self.window.history_page.reload()
 
     def do_activate(self) -> None:
+        # On first run the onboarding binds the shortcut itself, once it has
+        # explained what GNOME's dialog is about to ask. A hidden start has no
+        # window to explain anything in, so it binds straight away as before.
+        if self._start_hidden or self.settings.get_boolean("onboarding-completed"):
+            self._schedule_shortcuts()
         if self._start_hidden and self.window is None:
             self._hold()
             self._start_hidden = False
@@ -288,7 +295,43 @@ class ScribeApplication(Adw.Application):
 
     # -- portals ---------------------------------------------------------
 
+    def _schedule_shortcuts(self) -> None:
+        if self.shortcuts is None and self._shortcut_timer is None:
+            self._shortcut_timer = GLib.timeout_add(
+                SHORTCUT_START_DELAY_MS, self._start_shortcuts
+            )
+
+    def request_shortcut(
+        self, callback: Callable[[PortalError | None], None] | None = None
+    ) -> None:
+        """Bind the dictation shortcut now; callback(error) once GNOME answers.
+
+        error is None when the shortcut was bound. Asking again after a refusal
+        starts a fresh session, since BindShortcuts may only be called once per
+        session.
+        """
+        if callback:
+            self._shortcut_waiters.append(callback)
+        if self.shortcuts is None:
+            self._start_shortcuts()
+        elif self.shortcuts.triggers:
+            self._settle_shortcut(None)
+        else:
+            self.shortcut_error = ""
+            self.shortcuts.stop()
+            self.shortcuts.start()
+
+    def _settle_shortcut(self, error: PortalError | None) -> None:
+        waiters, self._shortcut_waiters = self._shortcut_waiters, []
+        for cb in waiters:
+            cb(error)
+
     def _start_shortcuts(self) -> bool:
+        if self._shortcut_timer is not None:
+            GLib.source_remove(self._shortcut_timer)
+            self._shortcut_timer = None
+        if self.shortcuts is not None:
+            return GLib.SOURCE_REMOVE
         self.shortcuts = ShortcutManager(
             on_press=lambda: self.controller.on_shortcut_press(),
             on_release=lambda: self.controller.on_shortcut_release(),
@@ -303,12 +346,15 @@ class ScribeApplication(Adw.Application):
         log.error("global shortcut unavailable: %s", error)
         if self.window:
             self.window.refresh_shortcut_state()
+        self._settle_shortcut(error)
 
     def _on_triggers_changed(self) -> None:
         self.shortcut_error = ""
         if self.window:
             self.window.refresh_shortcut_state()
         self._update_status()
+        if self.shortcuts and self.shortcuts.triggers:
+            self._settle_shortcut(None)
 
     def _configure_shortcuts(self) -> None:
         if self.shortcuts:
@@ -319,7 +365,9 @@ class ScribeApplication(Adw.Application):
         if self.window:
             self.window.refresh_shortcut_state()
 
-    def request_paste_permission(self) -> None:
+    def request_paste_permission(
+        self, callback: Callable[[bool], None] | None = None
+    ) -> None:
         """Ask for the RemoteDesktop grant now rather than mid-dictation.
 
         Left to itself the session is created by the first paste, which puts
@@ -328,7 +376,7 @@ class ScribeApplication(Adw.Application):
         focus about to move. Asking while Scribe's own window is in front costs
         the same one prompt at a moment that makes sense.
         """
-        self.injector.ensure_session()
+        self.injector.ensure_session(callback)
 
     def _request_background(self) -> None:
         self.background.request(

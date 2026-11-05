@@ -279,6 +279,16 @@ class TextInjector:
         self._set_state(InjectorState.READY)
         self._settle(True)
 
+    def forget_grant(self) -> None:
+        """Drop the session and its restore token, so the next one asks again.
+
+        Restoring from the token reuses whatever was granted last time, so
+        without this a user who refused clipboard access could never be asked
+        for it again.
+        """
+        self._set_token("")
+        self._drop_session("asking for consent again")
+
     def close(self) -> None:
         self._release_all()
         self._unwatch_closed()
